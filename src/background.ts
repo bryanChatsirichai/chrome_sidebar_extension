@@ -12,7 +12,6 @@ import {
   gxUpdateCompanionLayout
 } from './lib/companion';
 import { gxGetCompanionLayoutFromSettings } from './lib/defaults';
-import { gxSyncEmbedBypassRules } from './lib/embed-bypass';
 import {
   gxGetStorageData,
   gxInitializeStorage,
@@ -26,14 +25,10 @@ import type { Pin, Settings } from './lib/types';
 chrome.runtime.onInstalled.addListener(async () => {
   await gxInitializeStorage();
   await gxRestoreCompanionState();
-  const data = await gxGetStorageData();
-  await gxSyncEmbedBypassRules(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await gxRestoreCompanionState();
-  const data = await gxGetStorageData();
-  await gxSyncEmbedBypassRules(data.pins);
 });
 
 // --- Toolbar icon: show/hide sidebar ---
@@ -163,14 +158,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       settings: message.settings as Settings
     })
       .then(() => {
-        const tasks: Promise<unknown>[] = [];
         if (message.settings) {
-          tasks.push(gxUpdateCompanionLayout(gxGetCompanionLayoutFromSettings(message.settings)));
+          return gxUpdateCompanionLayout(gxGetCompanionLayoutFromSettings(message.settings));
         }
-        if (nextPins) {
-          tasks.push(gxSyncEmbedBypassRules(nextPins));
-        }
-        return Promise.all(tasks);
       })
       .then(() => sendResponse({ ok: true }));
     return true;
@@ -184,9 +174,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'resetStorage') {
     void gxResetStorageToDefaults()
       .then((data) =>
-        broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings })
-          .then(() => gxSyncEmbedBypassRules(data.pins))
-          .then(() => data)
+        broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings }).then(
+          () => data
+        )
       )
       .then((data) => sendResponse({ ok: true, data }))
       .catch((error) => sendResponse({ ok: false, error: String(error) }));

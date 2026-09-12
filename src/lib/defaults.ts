@@ -1,6 +1,6 @@
 import type { CompanionLayout, Pin, Settings, StorageData } from './types';
 
-/** Central constants for layout limits, default pins, and embed detection. */
+/** Central constants for layout limits and default pins. */
 export const GX_DEFAULTS = {
   STRIP_WIDTH: 48,
   PANEL_WIDTH: 400,
@@ -12,7 +12,6 @@ export const GX_DEFAULTS = {
   COMPANION_MAX_HEIGHT: 1200,
   COMPANION_POSITIONS: ['right', 'left', 'screen-right', 'screen-left'] as const,
   COMPANION_HEIGHT_MODES: ['match', 'fixed'] as const,
-  IFRAME_LOAD_TIMEOUT_MS: 5000,
 
   DEFAULT_PINS: [
     {

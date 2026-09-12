@@ -66,11 +66,7 @@ export async function loadSidebarStorage(): Promise<{
   }
 }
 
-export function applyLayoutClasses(
-  sidebarHidden: boolean,
-  panelOpen: boolean,
-  settingsOpen: boolean
-): void {
+export function applyLayoutClasses(sidebarHidden: boolean, settingsOpen: boolean): void {
   const html = document.documentElement;
   html.classList.remove('gx-sidebar-strip-visible', 'gx-sidebar-open', 'gx-sidebar-hidden');
 
@@ -79,7 +75,7 @@ export function applyLayoutClasses(
     return;
   }
 
-  if (panelOpen || settingsOpen) {
+  if (settingsOpen) {
     html.classList.add('gx-sidebar-open');
   } else {
     html.classList.add('gx-sidebar-strip-visible');

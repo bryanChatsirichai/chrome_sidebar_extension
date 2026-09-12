@@ -251,7 +251,7 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-section">
-          <h3 className="settings-heading">Panel width</h3>
+          <h3 className="settings-heading">Settings panel width</h3>
           <div className="settings-width-control">
             <input
               className="settings-width-range"
@@ -269,8 +269,11 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-section">
-          <h3 className="settings-heading">Companion window</h3>
-          <p className="settings-hint">Popup used when a site cannot load in the panel.</p>
+          <h3 className="settings-heading">App panel window</h3>
+          <p className="settings-hint">
+            Pinned sites open in a separate browser window docked beside your page — like Opera GX&apos;s
+            native sidebar.
+          </p>
           <label className="settings-label">Width</label>
           <div className="settings-width-control">
             <input

@@ -8,8 +8,7 @@
     "scripting",
     "tabs",
     "windows",
-    "system.display",
-    "declarativeNetRequestWithHostAccess"
+    "system.display"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

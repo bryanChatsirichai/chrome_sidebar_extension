@@ -1,6 +1,6 @@
 /**
  * Companion window lifecycle: create, reposition, navigate, and close
- * the popup used when sites cannot embed in the sidebar iframe.
+ * the docked popup that renders pinned sites in a separate browsing context.
  */
 import { GX_DEFAULTS, gxClamp, gxGetCompanionLayoutFromSettings } from './defaults';
 import type {

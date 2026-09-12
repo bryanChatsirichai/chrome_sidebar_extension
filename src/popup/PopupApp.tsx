@@ -162,26 +162,11 @@ export function PopupApp() {
       </header>
 
       <section className="section">
-        <h2>Panel width</h2>
-        <div className="width-control">
-          <input
-            type="range"
-            id="panelWidth"
-            min={300}
-            max={600}
-            step={10}
-            value={settings.panelWidth}
-            onChange={(e) => setSettings({ ...settings, panelWidth: Number(e.target.value) })}
-            onMouseUp={() => void updateSettings({ panelWidth: settings.panelWidth })}
-            onTouchEnd={() => void updateSettings({ panelWidth: settings.panelWidth })}
-          />
-          <span id="panelWidthValue">{settings.panelWidth}px</span>
-        </div>
-      </section>
-
-      <section className="section">
-        <h2>Companion window</h2>
-        <p className="hint">Popup used when a site cannot load in the panel.</p>
+        <h2>App panel window</h2>
+        <p className="hint">
+          Pinned sites open in a separate browser window docked beside your page — like Opera GX&apos;s
+          native sidebar.
+        </p>
         <label className="field-label" htmlFor="companionWidth">
           Width
         </label>
