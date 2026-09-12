@@ -14,32 +14,6 @@ export const GX_DEFAULTS = {
   COMPANION_HEIGHT_MODES: ['match', 'fixed'] as const,
   IFRAME_LOAD_TIMEOUT_MS: 5000,
 
-  /** Domains known to block iframe embedding; companion window is used instead. */
-  BLOCKED_DOMAINS: [
-    'discord.com',
-    'web.whatsapp.com',
-    'web.telegram.org',
-    'twitch.tv',
-    'open.spotify.com',
-    'spotify.com',
-    'youtube.com',
-    'x.com',
-    'twitter.com',
-    'instagram.com',
-    'messenger.com',
-    'facebook.com',
-    'accounts.google.com',
-    'google.com',
-    'github.com',
-    'linkedin.com',
-    'reddit.com',
-    'chatgpt.com',
-    'chat.openai.com',
-    'openai.com',
-    'claude.ai',
-    'anthropic.com'
-  ],
-
   DEFAULT_PINS: [
     {
       id: 'discord',
@@ -198,18 +172,6 @@ export function gxGetCompanionLayoutFromSettings(
     ),
     position
   };
-}
-
-/** Returns true when the URL hostname matches a known iframe-blocked domain. */
-export function gxIsDomainBlocked(url: string): boolean {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, '');
-    return GX_DEFAULTS.BLOCKED_DOMAINS.some(
-      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
-    );
-  } catch {
-    return false;
-  }
 }
 
 /** Returns a fresh copy of the factory-default storage snapshot. */

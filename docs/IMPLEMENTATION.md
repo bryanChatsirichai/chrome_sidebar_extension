@@ -8,8 +8,8 @@ GX Sidebar is a **Chrome Manifest V3 extension** that mimics Opera GX’s sideba
 
 **Primary UX:**
 1. A fixed **48px icon strip** on the left of every `http(s)` page (hideable via toolbar icon).
-2. An expandable **in-page panel** (300–600px) that loads embeddable pinned sites in an `<iframe>`.
-3. When a site blocks iframe embedding, a **single companion popup window** opens directly beside the main browser window — the in-page panel does not open first.
+2. An expandable **in-page panel** (300–600px) that loads pinned sites in an `<iframe>`. The panel is tried **first for every pin** — the background service worker strips iframe-blocking response headers (`X-Frame-Options`, CSP `frame-ancestors`) for pinned domains via `declarativeNetRequest`.
+3. If a site still can't render in the panel (rare — app-level JS/OAuth anti-framing checks that don't rely on headers), the runtime iframe-verification layer detects the failure and falls back to a **companion popup window** beside the main browser window.
 4. **Inline settings** (gear icon) to add/edit/remove/reorder pins, adjust panel width, and configure the companion window.
 
 ---
@@ -29,7 +29,7 @@ flowchart TB
   subgraph sw [background.ts service worker]
     BG[Message router]
     ST[lib/storage.ts]
-    EC[lib/embed-check.ts]
+    EB[lib/embed-bypass.ts]
     CP[lib/companion.ts]
   end
 
@@ -42,7 +42,7 @@ flowchart TB
   end
 
   SA -->|chrome.runtime.sendMessage| BG
-  BG --> EC
+  BG --> EB
   BG --> CP
   BG --> ST
   CP -->|chrome.windows.create / tabs.update| CW
@@ -54,11 +54,14 @@ flowchart TB
 
 ### Why not true Opera GX?
 
-Opera GX loads sidebar apps in **native browser webviews** (top-level browsing contexts). Chrome extensions can only:
+Opera GX loads sidebar apps in **native browser webviews** (top-level browsing contexts), which are never subject to `X-Frame-Options` / CSP `frame-ancestors` — those headers only govern embedding inside an `<iframe>`. Chrome extensions can only:
 - Inject into pages (`content_scripts`)
 - Open tabs/windows (`chrome.tabs`, `chrome.windows`)
+- Rewrite network response headers for requests they have host permission for (`declarativeNetRequest`)
 
-Sites like X, Instagram, and Discord send `X-Frame-Options` / CSP `frame-ancestors` headers that block iframe embedding. The companion window is the workaround: a real top-level tab in a narrow popup, not an iframe.
+There's no extension API to create a real top-level browsing context docked beside the page like Opera GX does, so this extension uses an `<iframe>` inside the injected sidebar. Sites like X, Instagram, and Discord send `X-Frame-Options` / CSP `frame-ancestors` headers specifically to block that kind of iframe embedding.
+
+**The fix (`lib/embed-bypass.ts`):** since the extension already has `<all_urls>` host permission, it uses `declarativeNetRequest` to strip those response headers for `sub_frame` requests to pinned domains before they reach the renderer. The remaining gap: a handful of sites (mainly OAuth/sign-in flows) also refuse framing via JavaScript or server-side checks unrelated to response headers — those still fall back to the companion popup window.
 
 ---
 
@@ -67,7 +70,7 @@ Sites like X, Instagram, and Discord send `X-Frame-Options` / CSP `frame-ancesto
 | Path | Role |
 |------|------|
 | `manifest.json` | MV3 config; `@crxjs/vite-plugin` builds to `dist/` |
-| `src/background.ts` | Service worker: messaging hub, embed preflight cache, companion routing, sidebar hide toggle |
+| `src/background.ts` | Service worker: messaging hub, embed-bypass rule sync, companion routing, sidebar hide toggle |
 | `src/content/main.tsx` | Entry: bootstrap, shadow DOM mount, React root |
 | `src/content/SidebarApp.tsx` | Main UI state: pins, panel, iframe verification, settings |
 | `src/content/components/IconStrip.tsx` | Pin buttons + gear |
@@ -77,10 +80,10 @@ Sites like X, Instagram, and Discord send `X-Frame-Options` / CSP `frame-ancesto
 | `src/content/keyboardIsolation.ts` | Prevents host-page shortcuts from swallowing sidebar input |
 | `src/content/sidebar.module.scss` | Shadow DOM styles (Opera GX dark theme) |
 | `src/content/page-shift.module.scss` | Shifts `html` margin when strip/panel open |
-| `src/lib/defaults.ts` | Constants, default pins, `BLOCKED_DOMAINS`, companion layout helpers |
+| `src/lib/defaults.ts` | Constants, default pins, companion layout helpers |
 | `src/lib/storage.ts` | `chrome.storage.sync` read/write helpers |
 | `src/lib/companion.ts` | Single companion window lifecycle, positioning, anchor tracking |
-| `src/lib/embed-check.ts` | Header preflight: `X-Frame-Options` / CSP `frame-ancestors` parsing |
+| `src/lib/embed-bypass.ts` | Syncs a `declarativeNetRequest` session rule that strips `X-Frame-Options` / CSP headers for pinned domains (`sub_frame` requests only) |
 | `src/lib/pin-utils.ts` | Icon URL resolution, URL parsing, pin reindexing, `getCurrentPagePinDefaults()` |
 | `src/lib/types.ts` | Shared TypeScript interfaces |
 | `src/popup/*` | Full-page options UI (`options_ui`); mirrors inline settings |
@@ -93,14 +96,15 @@ Sites like X, Instagram, and Discord send `X-Frame-Options` / CSP `frame-ancesto
 ## Permissions
 
 ```json
-["storage", "scripting", "tabs", "windows", "system.display"]
+["storage", "scripting", "tabs", "windows", "system.display", "declarativeNetRequestWithHostAccess"]
 ```
 
 - `storage` — pins/settings in `chrome.storage.sync`; companion state in `chrome.storage.session`
 - `scripting` — fallback inject when toolbar click hits a tab without content script
 - `tabs` / `windows` — companion window create/navigate/close; sidebar hide broadcast
 - `system.display` — screen-edge positioning and work-area clamping for companion window
-- `host_permissions: ["<all_urls>"]` — content scripts on all normal pages
+- `declarativeNetRequestWithHostAccess` — lets the background worker strip `X-Frame-Options` / CSP response headers for pinned domains (`lib/embed-bypass.ts`); requires the existing `<all_urls>` host permission
+- `host_permissions: ["<all_urls>"]` — content scripts on all normal pages; also backs the header-stripping rule above
 
 ---
 
@@ -196,18 +200,14 @@ Click pin
   → if same pin + panel open → closePanel()
   → if same pin + companion open (panel closed) → closeCompanion()
   → set activePinId, save last active pin
-  → queryEmbedAllowed(pin.url)     ← preflight BEFORE opening panel
-       ├─ blocked → openCompanionDirectly(pin)   ← panel never opens
-       └─ allowed → setPanelOpen(true), openPanelForPin(pin)
+  → setPanelOpen(true), openPanelForPin(pin)   ← always try the panel first
 ```
 
-**Design goal:** blocked sites must not open the sidebar panel, fail, close, then open the companion. Preflight runs while the panel stays closed; only embeddable sites open the in-page panel.
-
-`pinOpenGenerationRef` cancels stale preflight results if the user clicks another pin before the check finishes.
+**Design goal (Opera GX parity):** the in-page panel opens for *every* pin. `lib/embed-bypass.ts` strips blocking response headers for pinned domains in the background, so the iframe attempt is expected to succeed for the vast majority of sites. Only a genuine runtime failure triggers the companion window.
 
 ### 2. Open panel (`openPanelForPin`)
 
-Only called after preflight confirms embedding is allowed.
+Called directly on every pin click — no preflight gate.
 
 1. Reset embed-failure guards (`embedFailureHandled`, `embedFailureInFlight`, verify generation).
 2. Send `closeCompanion` immediately — only one side view (panel or companion) at a time.
@@ -217,7 +217,7 @@ Only called after preflight confirms embedding is allowed.
 
 ### 2b. Open companion directly (`openCompanionDirectly`)
 
-Used when preflight determines embedding is blocked, and for the manual “Open companion panel” fallback button.
+Used when the panel's runtime iframe verification decides the site truly can't render, and for the manual “Open companion panel” fallback button.
 
 1. Close any open in-page panel quietly (no loading flash).
 2. Call `openCompanionForPin(pin)` — opens or navigates the single companion window.
@@ -225,43 +225,31 @@ Used when preflight determines embedding is blocked, and for the manual “Open 
 
 ### 3. Iframe embed detection
 
-Embedding is validated in **three layers** (general — not per-site hardcoding):
+Embedding is handled in **two layers**:
 
-#### Layer A — Domain fast-path (`gxIsDomainBlocked`)
+#### Layer A — Network-level header bypass (`lib/embed-bypass.ts`)
 
-Hostname matched against `BLOCKED_DOMAINS` in `defaults.ts`. Returns `embedAllowed: false` immediately without header fetch. List includes Twitch, Spotify, YouTube, ChatGPT, Claude, Discord, X, etc.
+The background service worker keeps a single `declarativeNetRequest` **session rule** in sync with the current pin list. For `sub_frame` (iframe) requests to pinned hostnames, the rule removes:
+- `X-Frame-Options`
+- `Content-Security-Policy` (carries `frame-ancestors`)
+- `Content-Security-Policy-Report-Only`
+- `X-Content-Security-Policy` (legacy)
 
-#### Layer B — Header preflight (`lib/embed-check.ts`)
+Re-synced on `onInstalled`, `onStartup`, and whenever pins change via `broadcastPinsUpdated` / `resetStorage`. Only `sub_frame` requests are affected — normal top-level navigation is untouched.
 
-Background service worker fetches the pin URL (HEAD, GET fallback) and parses:
-- `X-Frame-Options: DENY` / `SAMEORIGIN`
-- CSP `frame-ancestors` (`'none'`, `'self'`, host lists — allows `*`, `http:`, `https:`)
+#### Layer B — Runtime iframe verification (`verifyIframeEmbed`)
 
-Results cached per hostname for 5 minutes (`embedAllowedCache` in `background.ts`).
-
-Called:
-- **On pin click** in `handlePinClick` via `queryEmbedAllowed()` — before `setPanelOpen(true)`
-- Before declaring iframe success in `finalizeIframeSuccess` (runtime re-check)
-
-#### Layer C — Runtime iframe verification (`verifyIframeEmbed`)
-
-Polls after load with a **generation counter** (`iframeVerifyGeneration`) so stale timers from previous loads/retries are ignored.
+Polls after load with a **generation counter** (`iframeVerifyGeneration`) so stale timers from previous loads/retries are ignored. This is the safety net for sites that still refuse to render even without blocking headers (JS-based or server-side anti-framing, mostly OAuth/sign-in flows).
 
 Detection paths:
 - `chrome-error:` in iframe location (when readable)
 - Error text in iframe document (`refused to connect`, `content is blocked`, etc.)
 - **`about:blank` stuck** after max retries → treat as failure (no infinite loading)
-- Cross-origin opaque frame (`location.href` throws → `null`) → run header check via `finalizeIframeSuccess` instead of assuming success
-
-**Important:** Sites like Twitch previously showed “refused to connect” inside the panel because cross-origin error pages are unreadable from the parent, so verification incorrectly called `showIframeLoaded()`. Preflight on pin click + `finalizeIframeSuccess` route blocked sites to the companion window without opening the panel.
+- Cross-origin opaque frame (`location.href` throws → `null`) → treated as success via `finalizeIframeSuccess` (expected for a genuine cross-origin load)
 
 **Success** → `showIframeLoaded()`:
 - Hides loading, shows iframe
 - Sends `closeCompanion` again if still open (idempotent; primary close happens in `openPanelForPin`)
-
-**Preflight blocked** → `openCompanionDirectly()`:
-- Companion opens; sidebar panel stays closed
-- Pin highlighted in icon strip
 
 **Runtime failure** (panel already open) → `handleEmbedFailure()` (single-flight guarded):
 - Opens/navigates companion via `openCompanionForPin({ closePanelOnOpen: true })`
@@ -293,11 +281,11 @@ Else → chrome.windows.create({ type: 'popup', url, ...bounds })
 **When user opens embeddable pin in main browser** (e.g. example.com):
 - `openPanelForPin` sends `closeCompanion` immediately, then loads the iframe in the panel
 
-**When user opens blocked pin while companion already shows another site**:
-- Preflight fails → `openCompanionDirectly` navigates companion tab to new URL (no second window, no panel flash)
+**When user opens a pin that fails at runtime while companion already shows another site**:
+- `handleEmbedFailure` navigates companion tab to new URL (no second window)
 
-**When user opens blocked pin while embeddable panel is open**:
-- `openCompanionDirectly` closes the panel first, then opens/navigates companion
+**When user opens a pin that fails at runtime while panel is open**:
+- `handleEmbedFailure` closes the panel and opens/navigates companion
 
 **When main browser window closes**:
 - Companion window is also closed (`windows.onRemoved` listener)
@@ -339,17 +327,16 @@ Toggles `sidebarHidden` in sync storage and broadcasts `setSidebarHidden` to all
 
 | Action | Direction | Handler | Purpose |
 |--------|-----------|---------|---------|
-| `checkEmbedAllowed` | content → background | `background.ts` → `embed-check.ts` | Header preflight; returns `{ embedAllowed }` |
 | `getSidebarContext` | content → background | `background.ts` | Returns `{ isCompanionWindow }` |
 | `openCompanion` | content → background | `background.ts` → `companion.ts` | Open or navigate single companion |
 | `closeCompanion` | content → background | `background.ts` → `companion.ts` | Close companion when panel opens or iframe succeeds (skipped if sender is companion) |
 | `saveLastActivePin` | content → background | `storage.ts` | Persist active pin id |
-| `broadcastPinsUpdated` | popup/settings → background | `background.ts` | Sync pins to all tabs + resize companion |
+| `broadcastPinsUpdated` | popup/settings → background | `background.ts` | Sync pins to all tabs + resize companion + re-sync embed-bypass rules |
 | `pinsUpdated` | background → content | `SidebarApp.tsx` | Re-render strip/settings |
 | `setSidebarHidden` | background → content | `SidebarApp.tsx` | Show/hide icon strip |
 | `companionClosed` | background → content | `SidebarApp.tsx` | Clear active pin highlight |
 | `getStorageData` | popup → background | `storage.ts` | Load pins/settings |
-| `resetStorage` | popup/settings → background | `storage.ts` | Restore defaults |
+| `resetStorage` | popup/settings → background | `storage.ts` | Restore defaults + re-sync embed-bypass rules |
 | `togglePanel` | background → content | `SidebarApp.tsx` | Legacy: open/close active panel |
 | `getState` | popup → content | `SidebarApp.tsx` | Return panel/sidebar state |
 | `openTab` | content → background | `background.ts` | Open URL in new tab |
@@ -364,12 +351,11 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 
 | Concern | Purpose |
 |---------|---------|
-| `handlePinClick` | Preflight on click; routes to panel or companion |
-| `queryEmbedAllowed` | Domain list + `checkEmbedAllowed` message |
-| `openCompanionDirectly` | Open companion without opening sidebar panel |
-| `openPanelForPin` | Close companion, then load iframe (only after preflight passes) |
-| `verifyIframeEmbed` | Poll-based runtime embed detection |
-| `finalizeIframeSuccess` | Header re-check before showing iframe |
+| `handlePinClick` | Always opens the in-page panel for the clicked pin |
+| `openCompanionDirectly` | Open companion (runtime-failure fallback + manual button) |
+| `openPanelForPin` | Close companion, then load the iframe |
+| `verifyIframeEmbed` | Poll-based runtime embed detection (safety net after header bypass) |
+| `finalizeIframeSuccess` | Confirms pin/generation are current, then shows the iframe |
 | `handleEmbedFailure` | Runtime fallback when panel is already open |
 | `quickPinCurrentPage` | One-click add of current page tab |
 | `showIframeLoaded` | Success path; redundant `closeCompanion` if still open |
@@ -387,13 +373,11 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 | `setCssVariables()` | Set `--gx-strip-width`, `--gx-panel-width` |
 | `injectPageShiftStyles()` | Inject global page-shift CSS once |
 
-### `lib/embed-check.ts`
+### `lib/embed-bypass.ts`
 
 | Function | Purpose |
 |----------|---------|
-| `gxCheckEmbedAllowed()` | Fetch URL headers and return whether iframe embed is allowed |
-| `gxHeadersBlockEmbedding()` | Parse `X-Frame-Options` + CSP from `Headers` |
-| `gxCspBlocksEmbedding()` | Interpret `frame-ancestors` directive |
+| `gxSyncEmbedBypassRules()` | Recomputes pin hostnames and atomically replaces the single `declarativeNetRequest` session rule that strips iframe-blocking response headers |
 
 ### `lib/companion.ts`
 
@@ -412,7 +396,6 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 | Function | Purpose |
 |----------|---------|
 | `broadcastToAllTabs()` | Send message to all injectable tabs |
-| `getEmbedAllowed()` | Cached wrapper around `gxCheckEmbedAllowed` |
 | `isInjectableUrl()` | http/https check |
 
 ---
@@ -424,9 +407,9 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 | Multiple companion windows | `companionOperation`, `companionCreateInProgress`, session persistence |
 | Multiple `handleEmbedFailure` calls | `embedFailureHandled`, `embedFailureInFlight` |
 | Stale iframe verify timers | `iframeVerifyGeneration` incremented on each new load |
-| Cross-origin false success | Preflight on pin click + `finalizeIframeSuccess` before `showIframeLoaded` |
-| Pin click vs async preflight race | `pinOpenGenerationRef` + `activePinIdRef` cancel stale results |
-| Panel flash on blocked sites | `openCompanionDirectly` — preflight before `setPanelOpen(true)` |
+| Cross-origin opaque frame mistaken for failure | `location.href` throwing is treated as success (expected for cross-origin load) |
+| Edited pin's embed-bypass rule not synced yet | `handleSavePin` reloads panel only after `await saveAndBroadcast(...)` resolves |
+| Runtime embed failure after header bypass | `handleEmbedFailure` (timeout/onerror/pattern match) — only remaining companion trigger |
 | Panel + companion both open | `openPanelForPin` closes companion immediately; `openCompanionDirectly` closes panel first |
 | Companion page opening another companion | Sidebar not injected in companion window |
 | MV3 service worker sleep | Pass `url` directly to `chrome.windows.create` (not create-then-navigate) |
@@ -437,11 +420,12 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 
 ## Platform limitations (do not try to “fix” without architectural change)
 
-1. **Cannot embed X, Discord, Instagram, etc. in iframe** — security headers, not a bug.
+1. **A handful of sites still can't be embedded** (mainly OAuth/sign-in flows) — they detect framing via JavaScript or server-side checks, not just response headers. These fall back to the companion window.
 2. **Cannot add real sidebar to browser chrome** — extension API limit.
 3. **Companion is a separate popup window** — not docked native panel like Opera GX.
 4. **Content scripts don’t run on `chrome://` pages** — toolbar toggle guarded.
 5. **`chrome.storage.sync` merge** — existing users keep old pins until reset; new default pins only apply on first install or reset.
+6. **Third-party cookie/session quirks** — the iframe is a third-party context; some sites may repeatedly ask to log in even once framing succeeds.
 
 ---
 
@@ -449,13 +433,12 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 
 | Pin | Expected behavior |
 |-----|-------------------|
-| **Example** (`example.com`) | Preflight passes → companion closes immediately → panel opens with iframe |
-| **Twitch / ChatGPT / Claude** | Preflight fails → companion opens directly; panel never opens; no “refused to connect” |
-| **X / Instagram / Discord** | Same as above — companion popup with full site |
+| **Example** (`example.com`) | Companion closes immediately → panel opens with iframe |
+| **Twitch / Discord / X / Instagram / ChatGPT / Claude** | Panel opens and loads iframe — embed-bypass strips blocking headers. Verify via service worker console that `gxSyncEmbedBypassRules` ran. |
+| OAuth/sign-in pages (e.g. `accounts.google.com`) | Panel opens, then falls back to companion after runtime detection — expected |
 | Click same pin (companion open) | Companion closes, pin deselected |
-| Switch X → Instagram (companion open) | Same companion navigates, no second window, no panel flash |
+| Switch pins while companion open | Same companion navigates, no second window |
 | Open Example while companion open | Companion closes as panel opens; iframe loads in panel |
-| Switch Example panel → Twitch | Panel closes; companion opens directly |
 | **Settings → Pin current page** | Adds current tab URL/title/favicon to strip |
 | Toolbar click | Hides/shows strip; page margin resets when hidden |
 | Companion position `right` | Follows main window when moved/resized |
@@ -472,16 +455,15 @@ Service worker logs: click **Service worker** link on extension card. Look for `
 
 Edit `GX_DEFAULTS.DEFAULT_PINS` in `src/lib/defaults.ts` and add icon under `icons/apps/`. Existing installs need **Reset to defaults** in settings.
 
-### Add blocked domain hint
+### Add more headers to the bypass
 
-Add hostname to `BLOCKED_DOMAINS` in `src/lib/defaults.ts` — skips iframe immediately without waiting for header fetch. Prefer this for known blockers; header check in `embed-check.ts` catches the rest.
+Edit `HEADERS_TO_STRIP` in `src/lib/embed-bypass.ts` if a site uses another header to block framing. Keep the list conservative.
 
-### Debug “refused to connect” in panel
+### Debug a site still falling back to the companion window
 
-1. Confirm `checkEmbedAllowed` returns `embedAllowed: false` for the URL (service worker console).
-2. Check hostname is in `BLOCKED_DOMAINS` or CSP/X-Frame-Options blocks embedding.
-3. Verify `handlePinClick` calls `openCompanionDirectly` (not `openPanelForPin`) when preflight fails.
-4. Verify `finalizeIframeSuccess` runs before `showIframeLoaded` for runtime checks (not a stale build).
+1. DevTools → Network → filter by pin domain → check whether `X-Frame-Options` / CSP are gone on the sub-frame document request. If still present, check service worker console for `gxSyncEmbedBypassRules` errors.
+2. If headers are gone but panel still falls back, the site is doing JS/server-side anti-framing — expected companion fallback.
+3. If fallback happens instantly, check `EMBED_BLOCKED_PATTERN` in `SidebarApp.tsx` isn't matching non-error page text (false positive).
 
 ### Change companion position defaults
 
@@ -502,4 +484,4 @@ Edit `DEFAULT_SETTINGS.companionPosition` in `src/lib/defaults.ts`, or adjust `g
 
 ---
 
-*Last updated to reflect: mutual exclusion between panel and companion (`closeCompanion` in `openPanelForPin`), preflight-first pin click flow, `embed-check.ts` header preflight.*
+*Last updated to reflect: `declarativeNetRequest`-based embed bypass (`lib/embed-bypass.ts`) replacing header-preflight/domain-blocklist gate — in-page panel opens for every pin; companion window is runtime-failure fallback only.*

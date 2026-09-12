@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GX_DEFAULTS, gxClamp, gxIsDomainBlocked } from '../lib/defaults';
+import { GX_DEFAULTS, gxClamp } from '../lib/defaults';
 import { parsePinUrl, reindexPins, resolveIconUrl, getCurrentPagePinDefaults } from '../lib/pin-utils';
 import type { CompanionOpenResult, Pin, Settings } from '../lib/types';
 import { IconStrip } from './components/IconStrip';
@@ -54,7 +54,6 @@ export function SidebarApp({
 
   const panelOpenRef = useRef(panelOpen);
   const activePinIdRef = useRef(activePinId);
-  const pinOpenGenerationRef = useRef(0);
   const handlePinClickRef = useRef<(pin: Pin) => void>(() => {});
 
   panelOpenRef.current = panelOpen;
@@ -108,23 +107,6 @@ export function SidebarApp({
     }
     return EMBED_BLOCKED_PATTERN.test(getIframeDocumentText());
   }, [getIframeDocumentText, getIframeLocationHref]);
-
-  const queryEmbedAllowed = useCallback(async (url: string): Promise<boolean> => {
-    if (gxIsDomainBlocked(url)) {
-      return false;
-    }
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'checkEmbedAllowed',
-        url
-      });
-      return Boolean(response?.embedAllowed);
-    } catch (error) {
-      console.warn('[GX Sidebar] Embed preflight failed:', error);
-      return true;
-    }
-  }, []);
 
   const saveAndBroadcast = useCallback(
     async (nextPins: Pin[], nextSettings: Settings, width: number) => {
@@ -256,12 +238,7 @@ export function SidebarApp({
   );
 
   const finalizeIframeSuccess = useCallback(
-    async (pin: Pin, generation: number) => {
-      if (generation !== iframeVerifyGenerationRef.current) {
-        return;
-      }
-
-      const embedAllowed = await queryEmbedAllowed(pin.url);
+    (pin: Pin, generation: number) => {
       if (generation !== iframeVerifyGenerationRef.current) {
         return;
       }
@@ -275,14 +252,9 @@ export function SidebarApp({
         return;
       }
 
-      if (!embedAllowed) {
-        void handleEmbedFailure(pin);
-        return;
-      }
-
       showIframeLoaded();
     },
-    [handleEmbedFailure, queryEmbedAllowed, showIframeLoaded]
+    [showIframeLoaded]
   );
 
   const verifyIframeEmbed = useCallback(
@@ -416,36 +388,18 @@ export function SidebarApp({
         return;
       }
 
-      const generation = ++pinOpenGenerationRef.current;
       setActivePinId(pin.id);
       activePinIdRef.current = pin.id;
       void chrome.runtime.sendMessage({ action: 'saveLastActivePin', pinId: pin.id });
 
-      void (async () => {
-        const embedAllowed = await queryEmbedAllowed(pin.url);
-        if (generation !== pinOpenGenerationRef.current || pin.id !== activePinIdRef.current) {
-          return;
-        }
-
-        if (!embedAllowed) {
-          await openCompanionDirectly(pin);
-          return;
-        }
-
-        setPanelOpen(true);
-        panelOpenRef.current = true;
-        openPanelForPin(pin);
-      })();
+      // Always try the in-page panel first — the background worker strips
+      // iframe-blocking response headers for pinned domains (embed-bypass.ts).
+      // Sites that still fail fall back to the companion window at runtime.
+      setPanelOpen(true);
+      panelOpenRef.current = true;
+      openPanelForPin(pin);
     },
-    [
-      activePinId,
-      closePanel,
-      openCompanionDirectly,
-      openPanelForPin,
-      panelOpen,
-      queryEmbedAllowed,
-      settingsOpen
-    ]
+    [activePinId, closePanel, openPanelForPin, panelOpen, settingsOpen]
   );
 
   handlePinClickRef.current = handlePinClick;
@@ -559,6 +513,7 @@ export function SidebarApp({
       }
 
       let nextPins: Pin[];
+      let reloadActivePanel = false;
 
       if (editingPinId) {
         nextPins = pins.map((pin) =>
@@ -566,12 +521,7 @@ export function SidebarApp({
             ? { ...pin, name, url: parsedUrl.href, iconUrl }
             : pin
         );
-        if (activePinId === editingPinId && panelOpen) {
-          const updated = nextPins.find((p) => p.id === editingPinId);
-          if (updated) {
-            openPanelForPin(updated);
-          }
-        }
+        reloadActivePanel = activePinId === editingPinId && panelOpen;
       } else {
         nextPins = [
           ...pins,
@@ -588,6 +538,13 @@ export function SidebarApp({
       resetPinForm();
       setPins(nextPins);
       await saveAndBroadcast(nextPins, settings, panelWidth);
+
+      if (reloadActivePanel) {
+        const updated = nextPins.find((p) => p.id === editingPinId);
+        if (updated) {
+          openPanelForPin(updated);
+        }
+      }
     },
     [
       activePinId,

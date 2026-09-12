@@ -11,8 +11,8 @@ import {
   gxRestoreCompanionState,
   gxUpdateCompanionLayout
 } from './lib/companion';
-import { gxGetCompanionLayoutFromSettings, gxIsDomainBlocked } from './lib/defaults';
-import { gxCheckEmbedAllowed } from './lib/embed-check';
+import { gxGetCompanionLayoutFromSettings } from './lib/defaults';
+import { gxSyncEmbedBypassRules } from './lib/embed-bypass';
 import {
   gxGetStorageData,
   gxInitializeStorage,
@@ -26,10 +26,14 @@ import type { Pin, Settings } from './lib/types';
 chrome.runtime.onInstalled.addListener(async () => {
   await gxInitializeStorage();
   await gxRestoreCompanionState();
+  const data = await gxGetStorageData();
+  await gxSyncEmbedBypassRules(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await gxRestoreCompanionState();
+  const data = await gxGetStorageData();
+  await gxSyncEmbedBypassRules(data.pins);
 });
 
 // --- Toolbar icon: show/hide sidebar ---
@@ -65,45 +69,9 @@ chrome.action.onClicked.addListener(async (tab) => {
   await broadcastToAllTabs({ action: 'setSidebarHidden', hidden });
 });
 
-const EMBED_ALLOWED_CACHE_TTL_MS = 5 * 60 * 1000;
-const embedAllowedCache = new Map<string, { allowed: boolean; expires: number }>();
-
-async function getEmbedAllowed(url: string): Promise<boolean> {
-  let hostname: string;
-  try {
-    hostname = new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return true;
-  }
-
-  const cached = embedAllowedCache.get(hostname);
-  if (cached && cached.expires > Date.now()) {
-    return cached.allowed;
-  }
-
-  if (gxIsDomainBlocked(url)) {
-    embedAllowedCache.set(hostname, { allowed: false, expires: Date.now() + EMBED_ALLOWED_CACHE_TTL_MS });
-    return false;
-  }
-
-  const allowed = await gxCheckEmbedAllowed(url);
-  embedAllowedCache.set(hostname, { allowed, expires: Date.now() + EMBED_ALLOWED_CACHE_TTL_MS });
-  return allowed;
-}
-
 // --- Runtime message handlers ---
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'checkEmbedAllowed' && message.url) {
-    void getEmbedAllowed(String(message.url))
-      .then((embedAllowed) => sendResponse({ ok: true, embedAllowed }))
-      .catch((error) => {
-        console.error('[GX Sidebar] checkEmbedAllowed failed:', error);
-        sendResponse({ ok: false, embedAllowed: true, error: String(error) });
-      });
-    return true;
-  }
-
   if (message.action === 'openTab' && message.url) {
     chrome.tabs.create({ url: message.url });
     sendResponse({ ok: true });
@@ -188,15 +156,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'broadcastPinsUpdated') {
+    const nextPins = message.pins as Pin[];
     void broadcastToAllTabs({
       action: 'pinsUpdated',
-      pins: message.pins as Pin[],
+      pins: nextPins,
       settings: message.settings as Settings
     })
       .then(() => {
+        const tasks: Promise<unknown>[] = [];
         if (message.settings) {
-          return gxUpdateCompanionLayout(gxGetCompanionLayoutFromSettings(message.settings));
+          tasks.push(gxUpdateCompanionLayout(gxGetCompanionLayoutFromSettings(message.settings)));
         }
+        if (nextPins) {
+          tasks.push(gxSyncEmbedBypassRules(nextPins));
+        }
+        return Promise.all(tasks);
       })
       .then(() => sendResponse({ ok: true }));
     return true;
@@ -210,9 +184,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'resetStorage') {
     void gxResetStorageToDefaults()
       .then((data) =>
-        broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings }).then(
-          () => data
-        )
+        broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings })
+          .then(() => gxSyncEmbedBypassRules(data.pins))
+          .then(() => data)
       )
       .then((data) => sendResponse({ ok: true, data }))
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
