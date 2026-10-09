@@ -8,10 +8,23 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { applyLayoutClasses, setCssVariables } from './sidebarUtils';
 
 const EMBED_BLOCKED_PATTERN =
-  /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by/i;
+  /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by|err_name_not_resolved|err_connection_refused|err_address_unreachable|err_cert_|err_timed_out/i;
 
 const IFRAME_VERIFY_MAX_ATTEMPTS = 1;
 const IFRAME_VERIFY_RETRY_MS = 100;
+/**
+ * Patience for frames whose load event fired while still on about:blank.
+ * A real navigation cancels these polls via a generation bump, so the budget
+ * only expires for genuinely blocked/stalled embeds — fail fast to companion
+ * instead of waiting for the full load timeout.
+ */
+const IFRAME_STALL_MAX_ATTEMPTS = 8;
+const IFRAME_STALL_RETRY_MS = 250;
+/** Post-success watchdog window that catches late-committed error pages. */
+const IFRAME_WATCHDOG_DURATION_MS = 4000;
+const IFRAME_WATCHDOG_INTERVAL_MS = 500;
+/** Chrome error pages have a tiny body; real site content is longer. */
+const IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH = 250;
 /** Safety net that force-navigates a pin if the about:blank reset commit stalls. */
 const FRAME_RESET_FALLBACK_MS = 350;
 
@@ -36,6 +49,7 @@ export function SidebarApp({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const iframeLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const iframeWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyGenerationRef = useRef(0);
   const frameResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameResettingRef = useRef(false);
@@ -86,6 +100,13 @@ export function SidebarApp({
     }
   }, []);
 
+  const clearIframeWatchdog = useCallback(() => {
+    if (iframeWatchdogTimerRef.current) {
+      clearTimeout(iframeWatchdogTimerRef.current);
+      iframeWatchdogTimerRef.current = null;
+    }
+  }, []);
+
   const getIframeLocationHref = useCallback((): string | null => {
     try {
       return iframeRef.current?.contentWindow?.location?.href ?? '';
@@ -115,6 +136,33 @@ export function SidebarApp({
     }
     return EMBED_BLOCKED_PATTERN.test(getIframeDocumentText());
   }, [getIframeDocumentText, getIframeLocationHref]);
+
+  /**
+   * Strict error-page check for the post-success watchdog. Unlike the broad
+   * load-time pattern, it requires a near-empty body so live site content
+   * mentioning phrases like "failed to load" never triggers a false failure.
+   */
+  const isIframeErrorPage = useCallback((): boolean => {
+    const href = getIframeLocationHref();
+    if (typeof href === 'string' && href.startsWith('chrome-error:')) {
+      return true;
+    }
+
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) {
+        return false;
+      }
+      const text = (doc.body?.innerText ?? '').trim();
+      return (
+        text.length > 0 &&
+        text.length <= IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH &&
+        /refused to connect|err_[a-z_]+/i.test(text)
+      );
+    } catch {
+      return false;
+    }
+  }, [getIframeLocationHref]);
 
   const saveAndBroadcast = useCallback(
     async (nextPins: Pin[], nextSettings: Settings, width: number) => {
@@ -180,13 +228,14 @@ export function SidebarApp({
   const showFallbackUI = useCallback(
     (pin: Pin) => {
       clearIframeTimer();
+      clearIframeWatchdog();
       if (iframeRef.current) {
         iframeRef.current.src = 'about:blank';
       }
       setFallbackPin(pin);
       setPanelView('fallback');
     },
-    [clearIframeTimer]
+    [clearIframeTimer, clearIframeWatchdog]
   );
 
   const handleEmbedFailure = useCallback(
@@ -199,6 +248,7 @@ export function SidebarApp({
       iframeVerifyGenerationRef.current += 1;
       clearIframeTimer();
       clearIframeVerifyTimer();
+      clearIframeWatchdog();
       if (iframeRef.current) {
         iframeRef.current.src = 'about:blank';
       }
@@ -218,7 +268,7 @@ export function SidebarApp({
 
       return embedFailureInFlightRef.current;
     },
-    [clearIframeTimer, clearIframeVerifyTimer, openCompanionForPin, showFallbackUI]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, openCompanionForPin, showFallbackUI]
   );
 
   const openCompanionDirectly = useCallback(
@@ -226,6 +276,7 @@ export function SidebarApp({
       if (panelOpenRef.current) {
         clearIframeTimer();
         clearIframeVerifyTimer();
+        clearIframeWatchdog();
         if (iframeRef.current) {
           iframeRef.current.src = 'about:blank';
         }
@@ -242,7 +293,48 @@ export function SidebarApp({
       }
       return response;
     },
-    [clearIframeTimer, clearIframeVerifyTimer, openCompanionForPin, showFallbackUI]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, openCompanionForPin, showFallbackUI]
+  );
+
+  /**
+   * Watches a successfully loaded frame for a short window afterwards.
+   * Some blocked embeds commit an error page late (after the load event was
+   * already treated as success); the watchdog detects that and falls back to
+   * the companion window instead of leaving a dead frame on screen.
+   */
+  const startIframeWatchdog = useCallback(
+    (pin: Pin, generation: number) => {
+      clearIframeWatchdog();
+      const startedAt = Date.now();
+
+      const poll = () => {
+        iframeWatchdogTimerRef.current = null;
+
+        if (
+          generation !== iframeVerifyGenerationRef.current ||
+          embedFailureHandledRef.current ||
+          embedFailureInFlightRef.current ||
+          !panelOpenRef.current ||
+          pin.id !== activePinIdRef.current
+        ) {
+          return;
+        }
+
+        if (Date.now() - startedAt >= IFRAME_WATCHDOG_DURATION_MS) {
+          return;
+        }
+
+        if (isIframeErrorPage()) {
+          void handleEmbedFailure(pin);
+          return;
+        }
+
+        iframeWatchdogTimerRef.current = setTimeout(poll, IFRAME_WATCHDOG_INTERVAL_MS);
+      };
+
+      iframeWatchdogTimerRef.current = setTimeout(poll, IFRAME_WATCHDOG_INTERVAL_MS);
+    },
+    [clearIframeWatchdog, handleEmbedFailure, isIframeErrorPage]
   );
 
   const finalizeIframeSuccess = useCallback(
@@ -261,8 +353,9 @@ export function SidebarApp({
       }
 
       showIframeLoaded();
+      startIframeWatchdog(pin, generation);
     },
-    [showIframeLoaded]
+    [showIframeLoaded, startIframeWatchdog]
   );
 
   const verifyIframeEmbed = useCallback(
@@ -284,12 +377,19 @@ export function SidebarApp({
       const href = getIframeLocationHref();
 
       if (href === 'about:blank' || href === '') {
-        if (attempt < IFRAME_VERIFY_MAX_ATTEMPTS) {
+        // A load event fired while the frame is still on about:blank: either
+        // the navigation is mid-commit (a real load cancels these polls via a
+        // generation bump) or the embed was blocked and never committed. Give
+        // it a short budget, then fail fast to the companion window instead
+        // of staring at the spinner until the full load timeout.
+        if (attempt < IFRAME_STALL_MAX_ATTEMPTS) {
           iframeVerifyTimerRef.current = setTimeout(
             () => verifyIframeEmbed(pin, attempt + 1, generation),
-            IFRAME_VERIFY_RETRY_MS
+            IFRAME_STALL_RETRY_MS
           );
+          return;
         }
+        void handleEmbedFailure(pin);
         return;
       }
 
@@ -345,6 +445,7 @@ export function SidebarApp({
 
       clearIframeTimer();
       clearIframeVerifyTimer();
+      clearIframeWatchdog();
 
       void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
 
@@ -399,7 +500,7 @@ export function SidebarApp({
         navigateToPin();
       }
     },
-    [clearIframeTimer, clearIframeVerifyTimer, handleEmbedFailure]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, handleEmbedFailure]
   );
 
   const closePanel = useCallback(() => {
@@ -411,10 +512,11 @@ export function SidebarApp({
     iframeVerifyGenerationRef.current += 1;
     clearIframeTimer();
     clearIframeVerifyTimer();
+    clearIframeWatchdog();
     if (iframeRef.current) {
       iframeRef.current.src = 'about:blank';
     }
-  }, [clearIframeTimer, clearIframeVerifyTimer]);
+  }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog]);
 
   const handlePinClick = useCallback(
     (pin: Pin) => {

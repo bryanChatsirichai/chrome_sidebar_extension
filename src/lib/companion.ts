@@ -290,6 +290,32 @@ function scheduleRepositionCompanion(): void {
   }, 150);
 }
 
+/**
+ * Fetches the companion tab, retrying briefly: right after window creation
+ * (or during tab churn) `windows.get` can resolve before `tabs` is populated,
+ * which previously surfaced as an intermittent 'Companion tab missing' error.
+ */
+async function gxGetCompanionTab(windowId: number): Promise<chrome.tabs.Tab | null> {
+  const GET_TAB_ATTEMPTS = 4;
+  const GET_TAB_RETRY_MS = 150;
+
+  for (let attempt = 0; attempt < GET_TAB_ATTEMPTS; attempt++) {
+    try {
+      const win = await chrome.windows.get(windowId, { populate: true });
+      const tab = win.tabs?.find((candidate) => typeof candidate.id === 'number');
+      if (tab) {
+        return tab;
+      }
+    } catch {
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, GET_TAB_RETRY_MS));
+  }
+
+  return null;
+}
+
 /** Navigates the companion tab to a new URL and updates tracked state. */
 async function gxNavigateCompanionTab(
   url: string,
@@ -297,8 +323,7 @@ async function gxNavigateCompanionTab(
   anchorWindowId: number,
   layout: Partial<Settings & CompanionLayout>
 ): Promise<void> {
-  const win = await chrome.windows.get(companionState.windowId!, { populate: true });
-  const tab = win.tabs?.[0];
+  const tab = await gxGetCompanionTab(companionState.windowId!);
 
   if (!tab?.id) {
     throw new Error('Companion tab missing');
