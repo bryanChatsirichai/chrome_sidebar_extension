@@ -9,6 +9,7 @@
     "tabs",
     "windows",
     "system.display",
+    "cookies",
     "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": ["<all_urls>"],

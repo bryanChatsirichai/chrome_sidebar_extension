@@ -25,7 +25,7 @@ const HEADERS_TO_STRIP = [
 ] as const;
 
 /** Extracts unique, bare (no `www.`) hostnames from a list of pin URLs. */
-function gxGetPinHostnames(pins: Pin[]): string[] {
+export function gxGetPinHostnames(pins: Pin[]): string[] {
   const hostnames = new Set<string>();
 
   for (const pin of pins) {

@@ -8,6 +8,10 @@ interface AppPanelProps {
   pin: Pin | null;
   panelView: PanelView;
   fallbackPin: Pin | null;
+  /** Changing this remounts the iframe: fresh, pristine frame per navigation. */
+  frameEpoch: number;
+  /** Target URL for the current frame; '' parks the frame on about:blank. */
+  frameSrc: string;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   resizeDragging: boolean;
   onClose: () => void;
@@ -23,6 +27,8 @@ export function AppPanel({
   pin,
   panelView,
   fallbackPin,
+  frameEpoch,
+  frameSrc,
   iframeRef,
   resizeDragging,
   onClose,
@@ -72,7 +78,9 @@ export function AppPanel({
         </div>
 
         <iframe
+          key={frameEpoch}
           ref={iframeRef}
+          src={frameSrc}
           className={`panel-iframe${panelView === 'iframe' ? '' : ' hidden'}`}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
           title={pin?.name ?? 'Pinned website'}

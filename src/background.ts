@@ -13,6 +13,7 @@ import {
 } from './lib/companion';
 import { gxGetCompanionLayoutFromSettings } from './lib/defaults';
 import { gxSyncEmbedBypassRules } from './lib/embed-bypass';
+import { gxRelaxPinnedSiteCookies, gxWatchPinnedSiteCookies } from './lib/cookie-auth';
 import {
   gxGetStorageData,
   gxInitializeStorage,
@@ -23,17 +24,23 @@ import type { Pin, Settings } from './lib/types';
 
 // --- Extension lifecycle ---
 
+// Re-writes pinned-site cookies so panel iframes reuse existing sessions.
+// Registered synchronously so it survives service-worker restarts.
+gxWatchPinnedSiteCookies();
+
 chrome.runtime.onInstalled.addListener(async () => {
   await gxInitializeStorage();
   await gxRestoreCompanionState();
   const data = await gxGetStorageData();
   await gxSyncEmbedBypassRules(data.pins);
+  await gxRelaxPinnedSiteCookies(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await gxRestoreCompanionState();
   const data = await gxGetStorageData();
   await gxSyncEmbedBypassRules(data.pins);
+  await gxRelaxPinnedSiteCookies(data.pins);
 });
 
 // --- Toolbar icon: show/hide sidebar ---
@@ -169,6 +176,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         if (nextPins) {
           tasks.push(gxSyncEmbedBypassRules(nextPins));
+          tasks.push(gxRelaxPinnedSiteCookies(nextPins));
         }
         return Promise.all(tasks);
       })
@@ -186,6 +194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((data) =>
         broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings })
           .then(() => gxSyncEmbedBypassRules(data.pins))
+          .then(() => gxRelaxPinnedSiteCookies(data.pins))
           .then(() => data)
       )
       .then((data) => sendResponse({ ok: true, data }))
