@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GX_DEFAULTS, gxGetDefaultStorageData } from '../lib/defaults';
+import { BROWSER_SIDEBAR_DEFAULTS, browserSidebarGetDefaultStorageData } from '../lib/defaults';
 import { parsePinUrl, reindexPins, resolveIconUrl } from '../lib/pin-utils';
 import type { Pin, Settings } from '../lib/types';
 
 async function loadStorageData(): Promise<{ pins: Pin[]; settings: Settings }> {
   const response = await chrome.runtime.sendMessage({ action: 'getStorageData' });
   return {
-    pins: (response.pins ?? gxGetDefaultStorageData().pins)
+    pins: (response.pins ?? browserSidebarGetDefaultStorageData().pins)
       .slice()
       .sort((a: Pin, b: Pin) => a.order - b.order),
-    settings: { ...GX_DEFAULTS.DEFAULT_SETTINGS, ...(response.settings ?? {}) }
+    settings: { ...BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS, ...(response.settings ?? {}) }
   };
 }
 
@@ -20,7 +20,7 @@ async function saveAndBroadcast(pins: Pin[], settings: Settings): Promise<void> 
 
 export function PopupApp() {
   const [pins, setPins] = useState<Pin[]>([]);
-  const [settings, setSettings] = useState<Settings>({ ...GX_DEFAULTS.DEFAULT_SETTINGS });
+  const [settings, setSettings] = useState<Settings>({ ...BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS });
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinName, setPinName] = useState('');
   const [pinUrl, setPinUrl] = useState('');
@@ -154,7 +154,7 @@ export function PopupApp() {
   return (
     <div className="popup-container">
       <header className="popup-header">
-        <h1>GX Sidebar</h1>
+        <h1>browser-sidebar</h1>
         <p className="subtitle">Manage pinned apps and panel settings</p>
       </header>
 

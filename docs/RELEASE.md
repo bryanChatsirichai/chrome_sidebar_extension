@@ -31,7 +31,7 @@ End users download a pre-built ZIP from [GitHub Releases](https://github.com/bry
 
 4. **Wait for CI** — open the **Actions** tab on GitHub. The “Build and release extension” workflow should finish in about one minute.
 
-5. **Verify the release** — open [Releases](https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases). You should see `gx-sidebar-v0.1.1.zip` attached.
+5. **Verify the release** — open [Releases](https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases). You should see `browser-sidebar-v0.1.1.zip` attached.
 
 Share this link with users:
 
@@ -42,7 +42,7 @@ https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases/l
 Direct download (after at least one release exists):
 
 ```
-https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases/latest/download/gx-sidebar-v0.1.1.zip
+https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases/latest/download/browser-sidebar-v0.1.1.zip
 ```
 
 Replace `0.1.1` with the current version, or use `/releases/latest/download/` only if you always upload a file with the same name (this workflow uses versioned filenames).
@@ -72,7 +72,7 @@ Use this when you fixed a bug but want to keep the same version (e.g. still `0.1
    git push origin v0.1.0
    ```
 
-4. **Wait for CI** — check the **Actions** tab. The release ZIP (`gx-sidebar-v0.1.0.zip`) is replaced on the existing **v0.1.0** release.
+4. **Wait for CI** — check the **Actions** tab. The release ZIP (`browser-sidebar-v0.1.0.zip`) is replaced on the existing **v0.1.0** release.
 
 > **Tip:** For small fixes, bumping the patch version (`0.1.0` → `0.1.1`) is often simpler — no tag deletion, and users can tell which build is newest.
 
@@ -84,7 +84,7 @@ On every push of a tag matching `v*` (e.g. `v0.1.0`, `v1.2.3`):
 
 1. Checks out the code at that tag
 2. Runs `npm ci`, `npm run typecheck`, and `npm run build`
-3. Zips the contents of `dist/` into `gx-sidebar-v{version}.zip`
+3. Zips the contents of `dist/` into `browser-sidebar-v{version}.zip`
 4. Creates a GitHub Release and attaches the ZIP
 
 ## Local build (optional)

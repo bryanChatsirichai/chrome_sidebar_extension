@@ -1,13 +1,13 @@
-$gx-accent: #ff0040;
-$gx-accent-hover: #e0003a;
-$gx-bg-dark: #111;
-$gx-bg-panel: #1a1a1a;
-$gx-border: #2a2a2a;
-$gx-border-hover: #444;
-$gx-text-muted: #888;
-$gx-text-dim: #666;
-$gx-text-light: #aaa;
-$gx-text-white: #fff;
+$browser-sidebar-accent: #ff0040;
+$browser-sidebar-accent-hover: #e0003a;
+$browser-sidebar-bg-dark: #111;
+$browser-sidebar-bg-panel: #1a1a1a;
+$browser-sidebar-border: #2a2a2a;
+$browser-sidebar-border-hover: #444;
+$browser-sidebar-text-muted: #888;
+$browser-sidebar-text-dim: #666;
+$browser-sidebar-text-light: #aaa;
+$browser-sidebar-text-white: #fff;
 
 :global {
   * {
@@ -18,7 +18,7 @@ $gx-text-white: #fff;
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: $gx-bg-dark;
+    background: $browser-sidebar-bg-dark;
     color: #eee;
     min-width: 360px;
   }
@@ -32,18 +32,18 @@ $gx-text-white: #fff;
   .popup-header {
     margin-bottom: 20px;
     padding-bottom: 16px;
-    border-bottom: 1px solid $gx-border;
+    border-bottom: 1px solid $browser-sidebar-border;
   }
 
   .popup-header h1 {
     font-size: 20px;
     font-weight: 700;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
   }
 
   .subtitle {
     font-size: 13px;
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
     margin-top: 4px;
   }
 
@@ -56,7 +56,7 @@ $gx-text-white: #fff;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
     margin-bottom: 10px;
   }
 
@@ -73,7 +73,7 @@ $gx-text-white: #fff;
 
   .hint {
     font-size: 11px;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
   }
 
   .width-control {
@@ -84,12 +84,12 @@ $gx-text-white: #fff;
 
   .width-control input[type='range'] {
     flex: 1;
-    accent-color: $gx-accent;
+    accent-color: $browser-sidebar-accent;
   }
 
   #panelWidthValue {
     font-size: 13px;
-    color: $gx-text-light;
+    color: $browser-sidebar-text-light;
     min-width: 48px;
     text-align: right;
   }
@@ -106,7 +106,7 @@ $gx-text-white: #fff;
     padding: 8px 10px;
     border: 1px solid #333;
     border-radius: 6px;
-    background: $gx-bg-panel;
+    background: $browser-sidebar-bg-panel;
     color: #eee;
     font-size: 13px;
   }
@@ -123,15 +123,15 @@ $gx-text-white: #fff;
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    background: $gx-bg-panel;
-    border: 1px solid $gx-border;
+    background: $browser-sidebar-bg-panel;
+    border: 1px solid $browser-sidebar-border;
     border-radius: 8px;
     cursor: grab;
     transition: border-color 0.15s ease, background 0.15s ease;
   }
 
   .pin-item:hover {
-    border-color: $gx-border-hover;
+    border-color: $browser-sidebar-border-hover;
   }
 
   .pin-item.dragging {
@@ -140,11 +140,11 @@ $gx-text-white: #fff;
   }
 
   .pin-item.drag-over {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
   }
 
   .pin-item.editing {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
     background: #1a1014;
   }
 
@@ -166,7 +166,7 @@ $gx-text-white: #fff;
     width: 24px;
     height: 24px;
     border-radius: 6px;
-    background: $gx-border;
+    background: $browser-sidebar-border;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -183,12 +183,12 @@ $gx-text-white: #fff;
   .pin-name {
     font-size: 13px;
     font-weight: 600;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
   }
 
   .pin-url {
     font-size: 11px;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -200,7 +200,7 @@ $gx-text-white: #fff;
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -221,7 +221,7 @@ $gx-text-white: #fff;
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -237,7 +237,7 @@ $gx-text-white: #fff;
 
   .pin-delete:hover {
     background: #331111;
-    color: $gx-accent;
+    color: $browser-sidebar-accent;
   }
 
   .add-form {
@@ -261,17 +261,17 @@ $gx-text-white: #fff;
 
   .add-form input {
     padding: 10px 12px;
-    border: 1px solid $gx-border;
+    border: 1px solid $browser-sidebar-border;
     border-radius: 8px;
-    background: $gx-bg-panel;
-    color: $gx-text-white;
+    background: $browser-sidebar-bg-panel;
+    color: $browser-sidebar-text-white;
     font-size: 13px;
     outline: none;
     transition: border-color 0.15s ease;
   }
 
   .add-form input:focus {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
   }
 
   .add-form input::placeholder {
@@ -293,36 +293,36 @@ $gx-text-white: #fff;
   }
 
   .btn-primary {
-    background: $gx-accent;
-    color: $gx-text-white;
+    background: $browser-sidebar-accent;
+    color: $browser-sidebar-text-white;
   }
 
   .btn-primary:hover {
-    background: $gx-accent-hover;
+    background: $browser-sidebar-accent-hover;
   }
 
   .btn-secondary {
-    background: $gx-border;
-    color: $gx-text-light;
+    background: $browser-sidebar-border;
+    color: $browser-sidebar-text-light;
   }
 
   .btn-secondary:hover {
     background: #333;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
   }
 
   .popup-footer {
     padding-top: 16px;
-    border-top: 1px solid $gx-border;
+    border-top: 1px solid $browser-sidebar-border;
   }
 
   .empty-state {
     padding: 16px;
     text-align: center;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     font-size: 13px;
-    background: $gx-bg-panel;
+    background: $browser-sidebar-bg-panel;
     border-radius: 8px;
-    border: 1px dashed $gx-border;
+    border: 1px dashed $browser-sidebar-border;
   }
 }

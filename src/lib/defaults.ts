@@ -1,7 +1,7 @@
 import type { Pin, Settings, StorageData } from './types';
 
 /** Central constants for layout limits, default pins, and embed detection. */
-export const GX_DEFAULTS = {
+export const BROWSER_SIDEBAR_DEFAULTS = {
   STRIP_WIDTH: 48,
   PANEL_WIDTH: 600,
   PANEL_MIN_WIDTH: 300,
@@ -67,16 +67,16 @@ export const GX_DEFAULTS = {
 } as const;
 
 /** Clamps a numeric value to an inclusive [min, max] range. */
-export function gxClamp(value: number, min: number, max: number): number {
+export function browserSidebarClamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
 /** Returns a fresh copy of the factory-default storage snapshot. */
-export function gxGetDefaultStorageData(): StorageData {
+export function browserSidebarGetDefaultStorageData(): StorageData {
   return {
-    pins: GX_DEFAULTS.DEFAULT_PINS.map((pin) => ({ ...pin })),
-    settings: { ...GX_DEFAULTS.DEFAULT_SETTINGS },
-    lastActivePinId: GX_DEFAULTS.DEFAULT_PINS[0].id,
+    pins: BROWSER_SIDEBAR_DEFAULTS.DEFAULT_PINS.map((pin) => ({ ...pin })),
+    settings: { ...BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS },
+    lastActivePinId: BROWSER_SIDEBAR_DEFAULTS.DEFAULT_PINS[0].id,
     sidebarHidden: false
   };
 }

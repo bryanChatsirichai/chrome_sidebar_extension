@@ -2,13 +2,13 @@
  * Service worker: extension lifecycle, toolbar toggle, and message routing
  * between popup, content scripts, and the sidebar panel.
  */
-import { gxSyncEmbedBypassRules } from './lib/embed-bypass';
-import { gxRelaxPinnedSiteCookies, gxWatchPinnedSiteCookies } from './lib/cookie-auth';
+import { browserSidebarSyncEmbedBypassRules } from './lib/embed-bypass';
+import { browserSidebarRelaxPinnedSiteCookies, browserSidebarWatchPinnedSiteCookies } from './lib/cookie-auth';
 import {
-  gxGetStorageData,
-  gxInitializeStorage,
-  gxResetStorageToDefaults,
-  gxSaveLastActivePinId
+  browserSidebarGetStorageData,
+  browserSidebarInitializeStorage,
+  browserSidebarResetStorageToDefaults,
+  browserSidebarSaveLastActivePinId
 } from './lib/storage';
 import type { Pin, Settings } from './lib/types';
 
@@ -20,33 +20,37 @@ void chrome.storage.session
   ?.setAccessLevel?.({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })
   .catch(() => {});
 
+// One-time cleanup of the stale pre-rename session keys (gxPanelOpen /
+// gxPanelPinId); harmless no-op once they are gone.
+void chrome.storage.session?.remove(['gxPanelOpen', 'gxPanelPinId']).catch(() => {});
+
 // Re-writes pinned-site cookies so panel iframes reuse existing sessions.
 // Registered synchronously so it survives service-worker restarts.
-gxWatchPinnedSiteCookies();
+browserSidebarWatchPinnedSiteCookies();
 
 // Mirror session panel-state changes to every tab so the panel stays open
 // (or closed) consistently across all tabs of the browser session.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'session' || !changes.gxPanelOpen) {
+  if (area !== 'session' || !changes.browserSidebarPanelOpen) {
     return;
   }
-  const open = Boolean(changes.gxPanelOpen.newValue);
+  const open = Boolean(changes.browserSidebarPanelOpen.newValue);
   const pinId =
-    typeof changes.gxPanelPinId?.newValue === 'string' ? changes.gxPanelPinId.newValue : null;
+    typeof changes.browserSidebarPanelPinId?.newValue === 'string' ? changes.browserSidebarPanelPinId.newValue : null;
   void broadcastToAllTabs({ action: 'panelStateSynced', open, pinId });
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await gxInitializeStorage();
-  const data = await gxGetStorageData();
-  await gxSyncEmbedBypassRules(data.pins);
-  await gxRelaxPinnedSiteCookies(data.pins);
+  await browserSidebarInitializeStorage();
+  const data = await browserSidebarGetStorageData();
+  await browserSidebarSyncEmbedBypassRules(data.pins);
+  await browserSidebarRelaxPinnedSiteCookies(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  const data = await gxGetStorageData();
-  await gxSyncEmbedBypassRules(data.pins);
-  await gxRelaxPinnedSiteCookies(data.pins);
+  const data = await browserSidebarGetStorageData();
+  await browserSidebarSyncEmbedBypassRules(data.pins);
+  await browserSidebarRelaxPinnedSiteCookies(data.pins);
 });
 
 // --- Toolbar icon: show/hide sidebar ---
@@ -92,7 +96,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'saveLastActivePin' && message.pinId) {
-    void gxSaveLastActivePinId(message.pinId).then(() => sendResponse({ ok: true }));
+    void browserSidebarSaveLastActivePinId(message.pinId).then(() => sendResponse({ ok: true }));
     return true;
   }
 
@@ -106,8 +110,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => {
         const tasks: Promise<unknown>[] = [];
         if (nextPins) {
-          tasks.push(gxSyncEmbedBypassRules(nextPins));
-          tasks.push(gxRelaxPinnedSiteCookies(nextPins));
+          tasks.push(browserSidebarSyncEmbedBypassRules(nextPins));
+          tasks.push(browserSidebarRelaxPinnedSiteCookies(nextPins));
         }
         return Promise.all(tasks);
       })
@@ -116,16 +120,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'getStorageData') {
-    void gxGetStorageData().then((data) => sendResponse(data));
+    void browserSidebarGetStorageData().then((data) => sendResponse(data));
     return true;
   }
 
   if (message.action === 'resetStorage') {
-    void gxResetStorageToDefaults()
+    void browserSidebarResetStorageToDefaults()
       .then((data) =>
         broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings })
-          .then(() => gxSyncEmbedBypassRules(data.pins))
-          .then(() => gxRelaxPinnedSiteCookies(data.pins))
+          .then(() => browserSidebarSyncEmbedBypassRules(data.pins))
+          .then(() => browserSidebarRelaxPinnedSiteCookies(data.pins))
           .then(() => data)
       )
       .then((data) => sendResponse({ ok: true, data }))

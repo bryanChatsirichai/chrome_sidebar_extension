@@ -21,21 +21,21 @@
  * Note: storage partitioning still applies to localStorage/IndexedDB inside
  * a third-party iframe; this module only restores cookie-based sessions.
  */
-import { gxGetPinHostnames } from './embed-bypass';
-import { gxGetStorageData } from './storage';
+import { browserSidebarGetPinHostnames } from './embed-bypass';
+import { browserSidebarGetStorageData } from './storage';
 import type { Pin } from './types';
 
 /** SameSite values that are NOT attached to cross-site iframe requests. */
 const IFRAME_BLOCKED_SAMESITE = new Set<string>(['lax', 'strict', 'unspecified']);
 
 /** Returns the cookie domain without its leading dot. */
-function gxBareCookieDomain(domain: string): string {
+function browserSidebarBareCookieDomain(domain: string): string {
   return domain.replace(/^\./, '');
 }
 
 /** True when a cookie domain belongs to one of the pinned hostnames. */
-function gxIsPinnedCookieDomain(domain: string, pinnedHosts: string[]): boolean {
-  const bare = gxBareCookieDomain(domain);
+function browserSidebarIsPinnedCookieDomain(domain: string, pinnedHosts: string[]): boolean {
+  const bare = browserSidebarBareCookieDomain(domain);
   return pinnedHosts.some((host) => bare === host || bare.endsWith(`.${host}`));
 }
 
@@ -43,14 +43,14 @@ function gxIsPinnedCookieDomain(domain: string, pinnedHosts: string[]): boolean 
  * Re-writes one cookie with `sameSite: 'no_restriction'` so it is sent when
  * the site is embedded in the panel iframe. Returns true when changed.
  */
-async function gxRelaxCookie(cookie: chrome.cookies.Cookie): Promise<boolean> {
+async function browserSidebarRelaxCookie(cookie: chrome.cookies.Cookie): Promise<boolean> {
   // Already usable in iframes, or not eligible (SameSite=None requires
   // the Secure attribute).
   if (cookie.sameSite === 'no_restriction' || !cookie.secure) {
     return false;
   }
 
-  const bareDomain = gxBareCookieDomain(cookie.domain);
+  const bareDomain = browserSidebarBareCookieDomain(cookie.domain);
   const details: chrome.cookies.SetDetails = {
     url: `https://${bareDomain}/`,
     name: cookie.name,
@@ -75,14 +75,14 @@ async function gxRelaxCookie(cookie: chrome.cookies.Cookie): Promise<boolean> {
     const result = await chrome.cookies.set(details);
     if (!result) {
       console.warn(
-        `[GX Sidebar] Failed to relax SameSite for cookie "${cookie.name}" on ${cookie.domain}`
+        `[browser-sidebar] Failed to relax SameSite for cookie "${cookie.name}" on ${cookie.domain}`
       );
       return false;
     }
     return true;
   } catch (error) {
     console.warn(
-      `[GX Sidebar] Error relaxing SameSite for cookie "${cookie.name}" on ${cookie.domain}:`,
+      `[browser-sidebar] Error relaxing SameSite for cookie "${cookie.name}" on ${cookie.domain}:`,
       error
     );
     return false;
@@ -94,12 +94,12 @@ async function gxRelaxCookie(cookie: chrome.cookies.Cookie): Promise<boolean> {
  * the panel iframe. Call whenever the pin list changes or the extension
  * starts up.
  */
-export async function gxRelaxPinnedSiteCookies(pins: Pin[]): Promise<void> {
+export async function browserSidebarRelaxPinnedSiteCookies(pins: Pin[]): Promise<void> {
   if (!chrome.cookies?.getAll) {
     return;
   }
 
-  const pinnedHosts = gxGetPinHostnames(pins);
+  const pinnedHosts = browserSidebarGetPinHostnames(pins);
   if (pinnedHosts.length === 0) {
     return;
   }
@@ -108,9 +108,9 @@ export async function gxRelaxPinnedSiteCookies(pins: Pin[]): Promise<void> {
     try {
       // `domain` matches the host itself plus any subdomains.
       const cookies = await chrome.cookies.getAll({ domain: host });
-      await Promise.all(cookies.map((cookie) => gxRelaxCookie(cookie)));
+      await Promise.all(cookies.map((cookie) => browserSidebarRelaxCookie(cookie)));
     } catch (error) {
-      console.warn(`[GX Sidebar] Failed to read cookies for ${host}:`, error);
+      console.warn(`[browser-sidebar] Failed to read cookies for ${host}:`, error);
     }
   }
 }
@@ -119,7 +119,7 @@ export async function gxRelaxPinnedSiteCookies(pins: Pin[]): Promise<void> {
  * Registers the cookie watcher. Must be called synchronously at the top level
  * of the service worker so it is re-registered on every worker wake.
  */
-export function gxWatchPinnedSiteCookies(): void {
+export function browserSidebarWatchPinnedSiteCookies(): void {
   if (!chrome.cookies?.onChanged) {
     return;
   }
@@ -132,13 +132,13 @@ export function gxWatchPinnedSiteCookies(): void {
 
     void (async () => {
       try {
-        const data = await gxGetStorageData();
-        if (!gxIsPinnedCookieDomain(change.cookie.domain, gxGetPinHostnames(data.pins))) {
+        const data = await browserSidebarGetStorageData();
+        if (!browserSidebarIsPinnedCookieDomain(change.cookie.domain, browserSidebarGetPinHostnames(data.pins))) {
           return;
         }
-        await gxRelaxCookie(change.cookie);
+        await browserSidebarRelaxCookie(change.cookie);
       } catch (error) {
-        console.warn('[GX Sidebar] Cookie watcher failed:', error);
+        console.warn('[browser-sidebar] Cookie watcher failed:', error);
       }
     })();
   });

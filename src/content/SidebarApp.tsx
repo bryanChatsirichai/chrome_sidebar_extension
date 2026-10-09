@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GX_DEFAULTS, gxClamp } from '../lib/defaults';
+import { BROWSER_SIDEBAR_DEFAULTS, browserSidebarClamp } from '../lib/defaults';
 import { parsePinUrl, reindexPins, resolveIconUrl, getCurrentPagePinDefaults } from '../lib/pin-utils';
 import type { Pin, Settings } from '../lib/types';
 import { IconStrip } from './components/IconStrip';
@@ -103,7 +103,7 @@ export function SidebarApp({
   const persistPanelSession = useCallback((open: boolean, pinId: string | null) => {
     try {
       void chrome.storage.session
-        ?.set({ gxPanelOpen: open, gxPanelPinId: open ? pinId : null })
+        ?.set({ browserSidebarPanelOpen: open, browserSidebarPanelPinId: open ? pinId : null })
         .catch(() => {});
     } catch {
       // Session storage is unavailable until the background grants access.
@@ -385,7 +385,7 @@ export function SidebarApp({
         ) {
           handleEmbedFailure(pin);
         }
-      }, GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
+      }, BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
     },
     [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, handleEmbedFailure, persistPanelSession]
   );
@@ -675,10 +675,10 @@ export function SidebarApp({
       // written imperatively at most once per animation frame.
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX;
-        currentWidth = gxClamp(
+        currentWidth = browserSidebarClamp(
           Math.round(startWidth + delta),
-          GX_DEFAULTS.PANEL_MIN_WIDTH,
-          GX_DEFAULTS.PANEL_MAX_WIDTH
+          BROWSER_SIDEBAR_DEFAULTS.PANEL_MIN_WIDTH,
+          BROWSER_SIDEBAR_DEFAULTS.PANEL_MAX_WIDTH
         );
         if (frame === null) {
           frame = requestAnimationFrame(() => {

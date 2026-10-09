@@ -1,27 +1,27 @@
 :global {
   :root {
-    --gx-strip-width: 48px;
-    --gx-panel-width: 400px;
+    --browser-sidebar-strip-width: 48px;
+    --browser-sidebar-panel-width: 400px;
   }
 
-  html.gx-sidebar-strip-visible {
-    margin-left: var(--gx-strip-width);
+  html.browser-sidebar-strip-visible {
+    margin-left: var(--browser-sidebar-strip-width);
     transition: margin-left 0.2s ease;
   }
 
-  html.gx-sidebar-open {
-    margin-left: calc(var(--gx-strip-width) + var(--gx-panel-width));
+  html.browser-sidebar-open {
+    margin-left: calc(var(--browser-sidebar-strip-width) + var(--browser-sidebar-panel-width));
     transition: margin-left 0.2s ease;
   }
 
-  html.gx-sidebar-hidden {
+  html.browser-sidebar-hidden {
     margin-left: 0 !important;
   }
 
   /* Live resize: no margin transition, the page must track the cursor 1:1. */
-  html.gx-resizing,
-  html.gx-resizing.gx-sidebar-open,
-  html.gx-resizing.gx-sidebar-strip-visible {
+  html.browser-sidebar-resizing,
+  html.browser-sidebar-resizing.browser-sidebar-open,
+  html.browser-sidebar-resizing.browser-sidebar-strip-visible {
     transition: none;
   }
 }

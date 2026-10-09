@@ -15,8 +15,8 @@ let hostEl: HTMLDivElement | null = null;
 
 registerDocumentKeyboardIsolation(() => hostEl);
 
-void (async function initGxSidebar(): Promise<void> {
-  if (window.top !== window.self || document.getElementById('gx-sidebar-host')) {
+void (async function initBrowserSidebar(): Promise<void> {
+  if (window.top !== window.self || document.getElementById('browser-sidebar-host')) {
     return;
   }
 
@@ -25,7 +25,7 @@ void (async function initGxSidebar(): Promise<void> {
   const storage = await loadSidebarStorage();
 
   hostEl = document.createElement('div');
-  hostEl.id = 'gx-sidebar-host';
+  hostEl.id = 'browser-sidebar-host';
   document.documentElement.appendChild(hostEl);
   attachHostKeyboardBubbleStop(hostEl);
 

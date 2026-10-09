@@ -1,14 +1,14 @@
-import { GX_DEFAULTS, gxGetDefaultStorageData } from '../lib/defaults';
+import { BROWSER_SIDEBAR_DEFAULTS, browserSidebarGetDefaultStorageData } from '../lib/defaults';
 import type { Pin, Settings } from '../lib/types';
 import pageShiftStyles from './page-shift.module.scss?inline';
 
 export function injectPageShiftStyles(): void {
-  if (document.getElementById('gx-page-shift-styles')) {
+  if (document.getElementById('browser-sidebar-page-shift-styles')) {
     return;
   }
 
   const style = document.createElement('style');
-  style.id = 'gx-page-shift-styles';
+  style.id = 'browser-sidebar-page-shift-styles';
   style.textContent = pageShiftStyles;
   document.documentElement.appendChild(style);
 }
@@ -23,18 +23,18 @@ export async function loadSidebarStorage(): Promise<{
 }> {
   try {
     const stored = await chrome.storage.sync.get(['pins', 'settings', 'lastActivePinId', 'sidebarHidden']);
-    const defaults = gxGetDefaultStorageData();
+    const defaults = browserSidebarGetDefaultStorageData();
     const settings = { ...defaults.settings, ...(stored.settings ?? {}) };
 
     // Session-scoped panel state shared across tabs of this browser session
     // (content scripts need the access level the background grants at startup).
     let panelSession = { open: false, pinId: null as string | null };
     try {
-      const session = await chrome.storage.session?.get(['gxPanelOpen', 'gxPanelPinId']);
+      const session = await chrome.storage.session?.get(['browserSidebarPanelOpen', 'browserSidebarPanelPinId']);
       if (session) {
         panelSession = {
-          open: Boolean(session.gxPanelOpen),
-          pinId: typeof session.gxPanelPinId === 'string' ? session.gxPanelPinId : null
+          open: Boolean(session.browserSidebarPanelOpen),
+          pinId: typeof session.browserSidebarPanelPinId === 'string' ? session.browserSidebarPanelPinId : null
         };
       }
     } catch {
@@ -46,17 +46,17 @@ export async function loadSidebarStorage(): Promise<{
       settings,
       activePinId: stored.lastActivePinId ?? null,
       sidebarHidden: Boolean(stored.sidebarHidden),
-      panelWidth: settings.panelWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
+      panelWidth: settings.panelWidth ?? BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
       panelSession
     };
   } catch {
-    const defaults = gxGetDefaultStorageData();
+    const defaults = browserSidebarGetDefaultStorageData();
     return {
       pins: defaults.pins,
       settings: defaults.settings,
       activePinId: null,
       sidebarHidden: false,
-      panelWidth: GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
+      panelWidth: BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
       panelSession: { open: false, pinId: null }
     };
   }
@@ -68,27 +68,27 @@ export function applyLayoutClasses(
   settingsOpen: boolean
 ): void {
   const html = document.documentElement;
-  html.classList.remove('gx-sidebar-strip-visible', 'gx-sidebar-open', 'gx-sidebar-hidden');
+  html.classList.remove('browser-sidebar-strip-visible', 'browser-sidebar-open', 'browser-sidebar-hidden');
 
   if (sidebarHidden) {
-    html.classList.add('gx-sidebar-hidden');
+    html.classList.add('browser-sidebar-hidden');
     return;
   }
 
   if (panelOpen || settingsOpen) {
-    html.classList.add('gx-sidebar-open');
+    html.classList.add('browser-sidebar-open');
   } else {
-    html.classList.add('gx-sidebar-strip-visible');
+    html.classList.add('browser-sidebar-strip-visible');
   }
 }
 
 export function setCssVariables(panelWidth: number, rootEl: HTMLElement | null): void {
-  document.documentElement.style.setProperty('--gx-strip-width', `${GX_DEFAULTS.STRIP_WIDTH}px`);
-  document.documentElement.style.setProperty('--gx-panel-width', `${panelWidth}px`);
+  document.documentElement.style.setProperty('--browser-sidebar-strip-width', `${BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH}px`);
+  document.documentElement.style.setProperty('--browser-sidebar-panel-width', `${panelWidth}px`);
 
   if (rootEl) {
-    rootEl.style.setProperty('--gx-strip-width', `${GX_DEFAULTS.STRIP_WIDTH}px`);
-    rootEl.style.setProperty('--gx-panel-width', `${panelWidth}px`);
+    rootEl.style.setProperty('--browser-sidebar-strip-width', `${BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH}px`);
+    rootEl.style.setProperty('--browser-sidebar-panel-width', `${panelWidth}px`);
   }
 }
 
@@ -99,10 +99,10 @@ export function setCssVariables(panelWidth: number, rootEl: HTMLElement | null):
  */
 export function setPanelWidthCss(panelWidth: number, rootEl: HTMLElement | null): void {
   const width = `${panelWidth}px`;
-  document.documentElement.style.setProperty('--gx-panel-width', width);
+  document.documentElement.style.setProperty('--browser-sidebar-panel-width', width);
 
   if (rootEl) {
-    rootEl.style.setProperty('--gx-panel-width', width);
+    rootEl.style.setProperty('--browser-sidebar-panel-width', width);
   }
 }
 
@@ -112,5 +112,5 @@ export function setPanelWidthCss(panelWidth: number, rootEl: HTMLElement | null)
  * cursor exactly instead of rubber-banding behind a 0.2s transition.
  */
 export function setPageResizeActive(active: boolean): void {
-  document.documentElement.classList.toggle('gx-resizing', active);
+  document.documentElement.classList.toggle('browser-sidebar-resizing', active);
 }

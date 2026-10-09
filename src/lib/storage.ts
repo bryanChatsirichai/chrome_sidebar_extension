@@ -1,9 +1,9 @@
-import { gxGetDefaultStorageData } from './defaults';
+import { browserSidebarGetDefaultStorageData } from './defaults';
 import type { Pin, Settings, StorageData } from './types';
 
 /** Reads pins, settings, and UI state from sync storage with defaults applied. */
-export async function gxGetStorageData(): Promise<StorageData> {
-  const defaults = gxGetDefaultStorageData();
+export async function browserSidebarGetStorageData(): Promise<StorageData> {
+  const defaults = browserSidebarGetDefaultStorageData();
   const stored = await chrome.storage.sync.get(['pins', 'settings', 'lastActivePinId', 'sidebarHidden']);
 
   return {
@@ -15,29 +15,29 @@ export async function gxGetStorageData(): Promise<StorageData> {
 }
 
 /** Persists the pin list to sync storage. */
-export async function gxSavePins(pins: Pin[]): Promise<void> {
+export async function browserSidebarSavePins(pins: Pin[]): Promise<void> {
   await chrome.storage.sync.set({ pins });
 }
 
 /** Persists settings to sync storage. */
-export async function gxSaveSettings(settings: Settings): Promise<void> {
+export async function browserSidebarSaveSettings(settings: Settings): Promise<void> {
   await chrome.storage.sync.set({ settings });
 }
 
 /** Remembers which pin was last active across tabs and sessions. */
-export async function gxSaveLastActivePinId(lastActivePinId: string): Promise<void> {
+export async function browserSidebarSaveLastActivePinId(lastActivePinId: string): Promise<void> {
   await chrome.storage.sync.set({ lastActivePinId });
 }
 
 /** Persists whether the sidebar strip is hidden on all pages. */
-export async function gxSaveSidebarHidden(sidebarHidden: boolean): Promise<void> {
+export async function browserSidebarSaveSidebarHidden(sidebarHidden: boolean): Promise<void> {
   await chrome.storage.sync.set({ sidebarHidden });
 }
 
 /** Seeds sync storage with defaults on first install when no pins exist yet. */
-export async function gxInitializeStorage(): Promise<void> {
+export async function browserSidebarInitializeStorage(): Promise<void> {
   const stored = await chrome.storage.sync.get(['pins', 'settings']);
-  const defaults = gxGetDefaultStorageData();
+  const defaults = browserSidebarGetDefaultStorageData();
 
   if (!stored.pins) {
     await chrome.storage.sync.set({
@@ -50,8 +50,8 @@ export async function gxInitializeStorage(): Promise<void> {
 }
 
 /** Replaces all sync storage with factory defaults and returns the new state. */
-export async function gxResetStorageToDefaults(): Promise<StorageData> {
-  const defaults = gxGetDefaultStorageData();
+export async function browserSidebarResetStorageToDefaults(): Promise<StorageData> {
+  const defaults = browserSidebarGetDefaultStorageData();
   await chrome.storage.sync.set(defaults);
   return defaults;
 }

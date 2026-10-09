@@ -1,5 +1,5 @@
 {
-  "name": "gx-sidebar-extension",
+  "name": "browser-sidebar",
   "version": "0.1.0",
   "engines": {
     "node": ">=20"

@@ -1,13 +1,13 @@
-$gx-accent: #ff0040;
-$gx-accent-hover: #e0003a;
-$gx-bg-dark: #111111;
-$gx-bg-panel: #1a1a1a;
-$gx-border: #2a2a2a;
-$gx-border-hover: #444;
-$gx-text-muted: #888;
-$gx-text-dim: #666;
-$gx-text-light: #aaa;
-$gx-text-white: #fff;
+$browser-sidebar-accent: #ff0040;
+$browser-sidebar-accent-hover: #e0003a;
+$browser-sidebar-bg-dark: #111111;
+$browser-sidebar-bg-panel: #1a1a1a;
+$browser-sidebar-border: #2a2a2a;
+$browser-sidebar-border-hover: #444;
+$browser-sidebar-text-muted: #888;
+$browser-sidebar-text-dim: #666;
+$browser-sidebar-text-light: #aaa;
+$browser-sidebar-text-white: #fff;
 
 :global {
   :host {
@@ -50,11 +50,11 @@ $gx-text-white: #fff;
   }
 
   .icon-strip {
-    width: var(--gx-strip-width, 48px);
-    min-width: var(--gx-strip-width, 48px);
+    width: var(--browser-sidebar-strip-width, 48px);
+    min-width: var(--browser-sidebar-strip-width, 48px);
     height: 100%;
-    background: $gx-bg-dark;
-    border-right: 1px solid $gx-border;
+    background: $browser-sidebar-bg-dark;
+    border-right: 1px solid $browser-sidebar-border;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -90,11 +90,11 @@ $gx-text-white: #fff;
   }
 
   .pin-button:hover {
-    background: $gx-border;
+    background: $browser-sidebar-border;
   }
 
   .pin-button.active {
-    background: $gx-border;
+    background: $browser-sidebar-border;
   }
 
   .pin-button.active::before {
@@ -105,7 +105,7 @@ $gx-text-white: #fff;
     transform: translateY(-50%);
     width: 3px;
     height: 20px;
-    background: $gx-accent;
+    background: $browser-sidebar-accent;
     border-radius: 0 2px 2px 0;
     box-shadow: 0 0 8px rgba(255, 0, 64, 0.5);
   }
@@ -117,7 +117,7 @@ $gx-text-white: #fff;
   }
 
   .pin-button .pin-fallback {
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     font-size: 14px;
     font-weight: 600;
   }
@@ -140,7 +140,7 @@ $gx-text-white: #fff;
     border-radius: 8px;
     background: transparent;
     cursor: pointer;
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -149,8 +149,8 @@ $gx-text-white: #fff;
   }
 
   .settings-button:hover {
-    background: $gx-border;
-    color: $gx-text-white;
+    background: $browser-sidebar-border;
+    color: $browser-sidebar-text-white;
   }
 
   .settings-button svg {
@@ -159,8 +159,8 @@ $gx-text-white: #fff;
   }
 
   .settings-button.active {
-    background: $gx-border;
-    color: $gx-text-white;
+    background: $browser-sidebar-border;
+    color: $browser-sidebar-text-white;
   }
 
   .settings-button.active::before {
@@ -171,7 +171,7 @@ $gx-text-white: #fff;
     transform: translateY(-50%);
     width: 3px;
     height: 20px;
-    background: $gx-accent;
+    background: $browser-sidebar-accent;
     border-radius: 0 2px 2px 0;
     box-shadow: 0 0 8px rgba(255, 0, 64, 0.5);
   }
@@ -180,8 +180,8 @@ $gx-text-white: #fff;
     width: 0;
     overflow: hidden;
     height: 100%;
-    background: $gx-bg-panel;
-    border-right: 1px solid $gx-border;
+    background: $browser-sidebar-bg-panel;
+    border-right: 1px solid $browser-sidebar-border;
     display: flex;
     flex-direction: column;
     transition: width 0.2s ease;
@@ -189,22 +189,22 @@ $gx-text-white: #fff;
   }
 
   .app-panel.open {
-    width: var(--gx-panel-width, 400px);
+    width: var(--browser-sidebar-panel-width, 400px);
   }
 
   .settings-panel {
     width: 0;
     overflow: hidden;
     height: 100%;
-    background: $gx-bg-panel;
-    border-right: 1px solid $gx-border;
+    background: $browser-sidebar-bg-panel;
+    border-right: 1px solid $browser-sidebar-border;
     display: flex;
     flex-direction: column;
     transition: width 0.2s ease;
   }
 
   .settings-panel.open {
-    width: var(--gx-panel-width, 400px);
+    width: var(--browser-sidebar-panel-width, 400px);
   }
 
   .settings-body {
@@ -253,7 +253,7 @@ $gx-text-white: #fff;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
   }
 
   .settings-add-form {
@@ -284,7 +284,7 @@ $gx-text-white: #fff;
     gap: 10px;
     padding: 12px;
     background: #111;
-    border: 1px solid $gx-border;
+    border: 1px solid $browser-sidebar-border;
     border-radius: 8px;
   }
 
@@ -307,13 +307,13 @@ $gx-text-white: #fff;
     width: 28px;
     height: 28px;
     border-radius: 6px;
-    background: $gx-border;
+    background: $browser-sidebar-border;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 13px;
     font-weight: 600;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     flex-shrink: 0;
   }
 
@@ -325,7 +325,7 @@ $gx-text-white: #fff;
   .settings-current-page-name {
     font-size: 13px;
     font-weight: 600;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -333,7 +333,7 @@ $gx-text-white: #fff;
 
   .settings-current-page-url {
     font-size: 11px;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -354,17 +354,17 @@ $gx-text-white: #fff;
 
   .settings-input {
     padding: 10px 12px;
-    border: 1px solid $gx-border;
+    border: 1px solid $browser-sidebar-border;
     border-radius: 8px;
     background: #111;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     font-size: 13px;
     outline: none;
     transition: border-color 0.15s ease;
   }
 
   .settings-input:focus {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
   }
 
   .settings-input::placeholder {
@@ -374,7 +374,7 @@ $gx-text-white: #fff;
   .settings-hint {
     margin: 0;
     font-size: 11px;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     line-height: 1.4;
   }
 
@@ -393,22 +393,22 @@ $gx-text-white: #fff;
   }
 
   .settings-btn-primary {
-    background: $gx-accent;
-    color: $gx-text-white;
+    background: $browser-sidebar-accent;
+    color: $browser-sidebar-text-white;
   }
 
   .settings-btn-primary:hover {
-    background: $gx-accent-hover;
+    background: $browser-sidebar-accent-hover;
   }
 
   .settings-btn-secondary {
-    background: $gx-border;
-    color: $gx-text-light;
+    background: $browser-sidebar-border;
+    color: $browser-sidebar-text-light;
   }
 
   .settings-btn-secondary:hover {
     background: #333;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
   }
 
   .settings-pins-list {
@@ -421,10 +421,10 @@ $gx-text-white: #fff;
   .settings-empty {
     padding: 12px;
     text-align: center;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     font-size: 12px;
     background: #111;
-    border: 1px dashed $gx-border;
+    border: 1px dashed $browser-sidebar-border;
     border-radius: 8px;
   }
 
@@ -434,14 +434,14 @@ $gx-text-white: #fff;
     gap: 10px;
     padding: 10px;
     background: #111;
-    border: 1px solid $gx-border;
+    border: 1px solid $browser-sidebar-border;
     border-radius: 8px;
     cursor: grab;
     transition: border-color 0.15s ease, background 0.15s ease;
   }
 
   .settings-pin-item:hover {
-    border-color: $gx-border-hover;
+    border-color: $browser-sidebar-border-hover;
   }
 
   .settings-pin-item.dragging {
@@ -450,11 +450,11 @@ $gx-text-white: #fff;
   }
 
   .settings-pin-item.drag-over {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
   }
 
   .settings-pin-item.editing {
-    border-color: $gx-accent;
+    border-color: $browser-sidebar-accent;
     background: #1a1014;
   }
 
@@ -478,13 +478,13 @@ $gx-text-white: #fff;
     width: 24px;
     height: 24px;
     border-radius: 6px;
-    background: $gx-border;
+    background: $browser-sidebar-border;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 12px;
     font-weight: 600;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     flex-shrink: 0;
   }
 
@@ -496,12 +496,12 @@ $gx-text-white: #fff;
   .settings-pin-name {
     font-size: 13px;
     font-weight: 600;
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
   }
 
   .settings-pin-url {
     font-size: 11px;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -513,7 +513,7 @@ $gx-text-white: #fff;
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     cursor: pointer;
     flex-shrink: 0;
   }
@@ -530,7 +530,7 @@ $gx-text-white: #fff;
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: $gx-text-dim;
+    color: $browser-sidebar-text-dim;
     cursor: pointer;
     flex-shrink: 0;
   }
@@ -542,7 +542,7 @@ $gx-text-white: #fff;
 
   .settings-pin-delete:hover {
     background: #331111;
-    color: $gx-accent;
+    color: $browser-sidebar-accent;
   }
 
   .settings-width-control {
@@ -553,12 +553,12 @@ $gx-text-white: #fff;
 
   .settings-width-range {
     flex: 1;
-    accent-color: $gx-accent;
+    accent-color: $browser-sidebar-accent;
   }
 
   .settings-width-value {
     font-size: 12px;
-    color: $gx-text-light;
+    color: $browser-sidebar-text-light;
     min-width: 44px;
     text-align: right;
   }
@@ -574,7 +574,7 @@ $gx-text-white: #fff;
     padding: 8px 10px;
     border: 1px solid #333;
     border-radius: 6px;
-    background: $gx-bg-panel;
+    background: $browser-sidebar-bg-panel;
     color: #eee;
     font-size: 12px;
   }
@@ -584,13 +584,13 @@ $gx-text-white: #fff;
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    background: $gx-bg-dark;
-    border-bottom: 1px solid $gx-border;
+    background: $browser-sidebar-bg-dark;
+    border-bottom: 1px solid $browser-sidebar-border;
     min-height: 44px;
   }
 
   .panel-title {
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     font-size: 13px;
     font-weight: 600;
     white-space: nowrap;
@@ -609,7 +609,7 @@ $gx-text-white: #fff;
     border: none;
     border-radius: 6px;
     background: transparent;
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -618,8 +618,8 @@ $gx-text-white: #fff;
   }
 
   .panel-action-btn:hover {
-    background: $gx-border;
-    color: $gx-text-white;
+    background: $browser-sidebar-border;
+    color: $browser-sidebar-text-white;
   }
 
   .panel-action-btn svg {
@@ -669,7 +669,7 @@ $gx-text-white: #fff;
     width: 48px;
     height: 48px;
     border-radius: 12px;
-    background: $gx-border;
+    background: $browser-sidebar-border;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -681,14 +681,14 @@ $gx-text-white: #fff;
   }
 
   .fallback-title {
-    color: $gx-text-white;
+    color: $browser-sidebar-text-white;
     font-size: 16px;
     font-weight: 600;
     margin: 0;
   }
 
   .fallback-message {
-    color: $gx-text-muted;
+    color: $browser-sidebar-text-muted;
     font-size: 13px;
     line-height: 1.5;
     margin: 0;
@@ -700,8 +700,8 @@ $gx-text-white: #fff;
     padding: 10px 20px;
     border: none;
     border-radius: 8px;
-    background: $gx-accent;
-    color: $gx-text-white;
+    background: $browser-sidebar-accent;
+    color: $browser-sidebar-text-white;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -709,7 +709,7 @@ $gx-text-white: #fff;
   }
 
   .open-tab-btn:hover {
-    background: $gx-accent-hover;
+    background: $browser-sidebar-accent-hover;
   }
 
   .open-tab-btn:active {
@@ -730,7 +730,7 @@ $gx-text-white: #fff;
 
   .resize-handle:hover,
   .resize-handle.dragging {
-    background: $gx-accent;
+    background: $browser-sidebar-accent;
   }
 
   .loading-view {
@@ -739,8 +739,8 @@ $gx-text-white: #fff;
     display: none;
     align-items: center;
     justify-content: center;
-    background: $gx-bg-panel;
-    color: $gx-text-muted;
+    background: $browser-sidebar-bg-panel;
+    color: $browser-sidebar-text-muted;
     font-size: 13px;
   }
 
@@ -752,7 +752,7 @@ $gx-text-white: #fff;
     width: 24px;
     height: 24px;
     border: 2px solid #333;
-    border-top-color: $gx-accent;
+    border-top-color: $browser-sidebar-accent;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-right: 10px;

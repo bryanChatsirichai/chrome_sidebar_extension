@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "GX Sidebar",
-  "version": "0.1.2",
-  "description": "Opera GX-style sidebar for Chrome — pin web apps and open them beside your page.",
+"name": "browser-sidebar",
+  "version": "0.1.0",
+  "description": "Sidebar for Chrome — pin web apps and open them beside your page.",
   "permissions": [
     "storage",
     "scripting",
@@ -21,7 +21,7 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "Toggle GX Sidebar",
+    "default_title": "Toggle browser-sidebar",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

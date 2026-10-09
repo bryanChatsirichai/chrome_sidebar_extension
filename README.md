@@ -1,11 +1,11 @@
-# GX Sidebar — Opera GX-Style Chrome Extension
+# browser-sidebar
 
-A Chrome extension that injects an Opera GX-style sidebar into web pages: a vertical icon strip on the left with an expandable panel for pinned web apps.
+A Chrome extension that injects a native-browser-style sidebar into web pages: a vertical icon strip on the left with an expandable panel for pinned web apps.
 
 ## Features
 
 - Persistent 48px icon strip on the left edge of every page (hideable via toolbar icon)
-- Expandable panel (300–1000px, resizable) that always tries to load pinned sites in an iframe first — like Opera GX's native sidebar
+- Expandable panel (300–1000px, resizable) that always tries to load pinned sites in an iframe first — like a native browser sidebar
 - **Automatic iframe-block bypass** — a four-layer pipeline (header stripping, Fetch Metadata spoofing, cookie `SameSite` relaxation, runtime verification) makes sites that normally refuse to be framed (Discord, Twitch, X, Instagram, ChatGPT, Claude, Messenger, etc.) load directly in the panel — see [How blocked sites work](#how-blocked-sites-work)
 - **Seamless resizing** — drag the panel edge or scrub the settings slider; the host page tracks the cursor live while the embedded site reflows only once on release, so heavy apps (ChatGPT, Messenger) never jank or crash the tab during the gesture
 - **In-panel fallback view** — if a site still can't render in the panel after the panel actually tries (e.g. app-level anti-framing on OAuth/sign-in pages), the panel shows an icon, the pin name, a "This site could not load in the panel." message, and an **Open in new tab** button
@@ -13,7 +13,7 @@ A Chrome extension that injects an Opera GX-style sidebar into web pages: a vert
 - **Pin current page** from settings — one-click add with title, URL, and favicon
 - Add and edit custom pins with name, URL, and optional icon
 - Drag-to-reorder pins in settings
-- Dark Opera GX-inspired theme
+- Dark theme
 - Settings sync across devices via `chrome.storage.sync`
 
 ## Install
@@ -22,8 +22,8 @@ A Chrome extension that injects an Opera GX-style sidebar into web pages: a vert
 
 ### For users (no build required)
 
-1. Download **gx-sidebar-v*.zip** from [GitHub Releases](https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases/latest)
-2. Extract the ZIP (e.g. to `Downloads\gx-sidebar`)
+1. Download **browser-sidebar-v*.zip** from [GitHub Releases](https://github.com/bryanChatsirichai/chrome_operaGX_sidebar_extension/releases/latest)
+2. Extract the ZIP (e.g. to `Downloads\browser-sidebar`)
 3. Open Chrome and go to `chrome://extensions`
 4. Enable **Developer mode** (top right)
 5. Click **Load unpacked** and select the extracted folder (the one containing `manifest.json`)
@@ -59,7 +59,7 @@ See [docs/RELEASE.md](docs/RELEASE.md) — bump `manifest.json` version, commit,
 
 ## How blocked sites work
 
-Many sites refuse to load inside iframes. Opera GX's native sidebar doesn't hit this at all because it renders sites in a real browser tab, not a same-page `<iframe>`. A Chrome extension has no API to do that, so this extension layers four workarounds to reach the same result:
+Many sites refuse to load inside iframes. Browsers with native sidebars don't hit this at all because they render sites in a real browser tab, not a same-page `<iframe>`. A Chrome extension has no API to do that, so this extension layers four workarounds to reach the same result:
 
 1. **Header bypass** (`declarativeNetRequest`, rule 1) — for iframe responses from pinned domains, strips `X-Frame-Options`, CSP `frame-ancestors` (including `Content-Security-Policy-Report-Only` / `X-Content-Security-Policy`), and `Cross-Origin-Embedder-Policy`, *and* injects `Cross-Origin-Resource-Policy: cross-origin` so embeds also work on host pages that enforce COEP `require-corp`. All before Chrome ever renders the frame.
 2. **Fetch Metadata spoofing** (rule 2) — rewrites the iframe's request headers to look like a top-level address-bar visit (`Sec-Fetch-Dest: document`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Site: none`, `Sec-Fetch-User: ?1`, no `Referer`). This defeats server-side framing checks that never look at response headers — e.g. Messenger serving "Your Request Couldn't be Processed" (error 1357005) to anything arriving with `Sec-Fetch-Dest: iframe`.
@@ -83,7 +83,7 @@ src/
       IconStrip.tsx        Pin buttons + settings gear
       AppPanel.tsx         Iframe panel, loading/fallback views
       SettingsPanel.tsx    Inline settings (pins, pin current page, width, reset)
-    sidebar.module.scss    Opera GX dark theme (shadow DOM)
+    sidebar.module.scss    Dark theme (shadow DOM)
     page-shift.module.scss Page margin shift styles
   popup/
     popup.html/main.tsx    Options page entry
@@ -115,7 +115,7 @@ After editing source files, reload the extension at `chrome://extensions` (load 
 
 ## Known Limitations
 
-- **In-page overlay, not browser chrome.** Chrome extensions cannot modify the area left of the address bar the way Opera GX does natively. This extension overlays the page viewport and shifts content with a CSS margin.
+- **In-page overlay, not browser chrome.** Chrome extensions cannot modify the area left of the address bar the way native browser sidebars do. This extension overlays the page viewport and shifts content with a CSS margin.
 - **A few sites still can't embed.** Discord, Twitch, Spotify, ChatGPT, Claude, WhatsApp, X, Instagram, and similar sites *used to* refuse iframe embedding, but now load directly in the panel thanks to the four-layer bypass (header stripping, Fetch Metadata spoofing, cookie relaxation). Sites that detect framing via JavaScript or server-side checks that can't be spoofed (mainly OAuth/sign-in flows like Google/Microsoft accounts) still can't be fixed this way — the panel shows an in-panel fallback view with an **Open in new tab** button instead.
 - **Shared browser session.** The iframe panel uses your normal browser cookies/session — pinned-site cookies are re-written as `SameSite=None` so they work inside the cross-site iframe. Blocking third-party cookies in Chrome settings breaks iframe cookies regardless, and third-party iframe `localStorage`/`IndexedDB` stays storage-partitioned.
 - **Page layout conflicts.** Sites with aggressive full-viewport layouts may not shift cleanly when the panel opens.

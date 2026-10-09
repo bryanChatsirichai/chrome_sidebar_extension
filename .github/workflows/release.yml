@@ -43,7 +43,7 @@ jobs:
           npm run typecheck
           npm run build
 
-      # Used to name the ZIP (gx-sidebar-v0.1.0.zip) and match the release tag.
+      # Used to name the ZIP (browser-sidebar-v0.1.0.zip) and match the release tag.
       - name: Read version from manifest
         id: version
         run: echo "version=$(node -p "require('./manifest.json').version")" >> "$GITHUB_OUTPUT"
@@ -52,13 +52,13 @@ jobs:
       - name: Create ZIP from dist/
         run: |
           cd dist
-          zip -r "../gx-sidebar-v${{ steps.version.outputs.version }}.zip" .
+          zip -r "../browser-sidebar-v${{ steps.version.outputs.version }}.zip" .
 
       # Creates the GitHub Release for the pushed tag and attaches the ZIP.
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v3
         if: github.ref_type == 'tag'
         with:
-          files: gx-sidebar-v${{ steps.version.outputs.version }}.zip
+          files: browser-sidebar-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true
           overwrite_files: true # replace ZIP when rebuilding the same version tag
