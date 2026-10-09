@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GX Sidebar",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Opera GX-style sidebar for Chrome — pin web apps and open them beside your page.",
   "permissions": [
     "storage",
