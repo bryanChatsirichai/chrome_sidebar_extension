@@ -12,6 +12,8 @@ const EMBED_BLOCKED_PATTERN =
 
 const IFRAME_VERIFY_MAX_ATTEMPTS = 1;
 const IFRAME_VERIFY_RETRY_MS = 100;
+/** Safety net that force-navigates a pin if the about:blank reset commit stalls. */
+const FRAME_RESET_FALLBACK_MS = 350;
 
 export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
 
@@ -35,6 +37,8 @@ export function SidebarApp({
   const iframeLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyGenerationRef = useRef(0);
+  const frameResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameResettingRef = useRef(false);
   const embedFailureHandledRef = useRef(false);
   const embedFailureInFlightRef = useRef<Promise<CompanionOpenResult | undefined> | null>(null);
   const draggedIndexRef = useRef<number | null>(null);
@@ -68,6 +72,10 @@ export function SidebarApp({
     if (iframeLoadTimerRef.current) {
       clearTimeout(iframeLoadTimerRef.current);
       iframeLoadTimerRef.current = null;
+    }
+    if (frameResetTimerRef.current) {
+      clearTimeout(frameResetTimerRef.current);
+      frameResetTimerRef.current = null;
     }
   }, []);
 
@@ -330,6 +338,8 @@ export function SidebarApp({
       embedFailureHandledRef.current = false;
       embedFailureInFlightRef.current = null;
       iframeVerifyGenerationRef.current += 1;
+      const generation = iframeVerifyGenerationRef.current;
+      frameResettingRef.current = false;
       setPanelView('loading');
       setFallbackPin(null);
 
@@ -338,20 +348,56 @@ export function SidebarApp({
 
       void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
 
-      if (iframeRef.current) {
-        iframeRef.current.src = pin.url;
-      }
-
-      iframeLoadTimerRef.current = setTimeout(() => {
-        if (
-          !embedFailureHandledRef.current &&
-          !embedFailureInFlightRef.current &&
-          panelOpenRef.current &&
-          pin.id === activePinIdRef.current
-        ) {
-          void handleEmbedFailure(pin);
+      let navigated = false;
+      const navigateToPin = () => {
+        if (navigated || generation !== iframeVerifyGenerationRef.current) {
+          return;
         }
-      }, GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
+        navigated = true;
+        frameResettingRef.current = false;
+        if (frameResetTimerRef.current) {
+          clearTimeout(frameResetTimerRef.current);
+          frameResetTimerRef.current = null;
+        }
+
+        if (iframeRef.current) {
+          iframeRef.current.src = pin.url;
+        }
+
+        iframeLoadTimerRef.current = setTimeout(() => {
+          if (
+            !embedFailureHandledRef.current &&
+            !embedFailureInFlightRef.current &&
+            panelOpenRef.current &&
+            pin.id === activePinIdRef.current
+          ) {
+            void handleEmbedFailure(pin);
+          }
+        }, GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
+      };
+
+      const frame = iframeRef.current;
+      const currentSrc = frame?.getAttribute('src') ?? '';
+
+      // When the frame still holds a previously loaded site, route through
+      // about:blank first so the new pin starts from the same pristine frame
+      // state as a fresh panel open. Navigating directly from one committed
+      // cross-origin document to another is what makes pin switching flaky.
+      if (frame && currentSrc && currentSrc !== 'about:blank') {
+        frameResettingRef.current = true;
+        frame.addEventListener('load', navigateToPin, { once: true });
+        frame.src = 'about:blank';
+        frameResetTimerRef.current = setTimeout(() => {
+          if (
+            generation === iframeVerifyGenerationRef.current &&
+            iframeRef.current?.getAttribute('src') === 'about:blank'
+          ) {
+            navigateToPin();
+          }
+        }, FRAME_RESET_FALLBACK_MS);
+      } else {
+        navigateToPin();
+      }
     },
     [clearIframeTimer, clearIframeVerifyTimer, handleEmbedFailure]
   );
@@ -361,6 +407,7 @@ export function SidebarApp({
     setPanelView('idle');
     embedFailureHandledRef.current = false;
     embedFailureInFlightRef.current = null;
+    frameResettingRef.current = false;
     iframeVerifyGenerationRef.current += 1;
     clearIframeTimer();
     clearIframeVerifyTimer();
@@ -406,7 +453,13 @@ export function SidebarApp({
 
   const handleIframeLoad = useCallback(() => {
     const pin = getActivePin();
-    if (!pin || !panelOpen || embedFailureHandledRef.current || embedFailureInFlightRef.current) {
+    if (
+      !pin ||
+      !panelOpen ||
+      frameResettingRef.current ||
+      embedFailureHandledRef.current ||
+      embedFailureInFlightRef.current
+    ) {
       return;
     }
     startIframeVerification(pin);
@@ -702,7 +755,10 @@ export function SidebarApp({
       }
 
       if (message.action === 'companionClosed') {
-        if (message.pinId === activePinIdRef.current) {
+        // Ignore deselect signals while the in-page panel is open: pin switching
+        // fires closeCompanion before loading the next pin, and the broadcast
+        // can arrive after the new pin is already active.
+        if (message.pinId === activePinIdRef.current && !panelOpenRef.current) {
           setActivePinId(null);
         }
         sendResponse({ ok: true });
