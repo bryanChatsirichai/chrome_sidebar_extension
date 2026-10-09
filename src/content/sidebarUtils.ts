@@ -41,18 +41,35 @@ export async function loadSidebarStorage(): Promise<{
   activePinId: string | null;
   sidebarHidden: boolean;
   panelWidth: number;
+  panelSession: { open: boolean; pinId: string | null };
 }> {
   try {
     const stored = await chrome.storage.sync.get(['pins', 'settings', 'lastActivePinId', 'sidebarHidden']);
     const defaults = gxGetDefaultStorageData();
     const settings = { ...defaults.settings, ...(stored.settings ?? {}) };
 
+    // Session-scoped panel state shared across tabs of this browser session
+    // (content scripts need the access level the background grants at startup).
+    let panelSession = { open: false, pinId: null as string | null };
+    try {
+      const session = await chrome.storage.session?.get(['gxPanelOpen', 'gxPanelPinId']);
+      if (session) {
+        panelSession = {
+          open: Boolean(session.gxPanelOpen),
+          pinId: typeof session.gxPanelPinId === 'string' ? session.gxPanelPinId : null
+        };
+      }
+    } catch {
+      // Access level not granted yet this session — panel starts closed.
+    }
+
     return {
       pins: (stored.pins ?? defaults.pins).slice().sort((a: Pin, b: Pin) => a.order - b.order),
       settings,
       activePinId: stored.lastActivePinId ?? null,
       sidebarHidden: Boolean(stored.sidebarHidden),
-      panelWidth: settings.panelWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth
+      panelWidth: settings.panelWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
+      panelSession
     };
   } catch {
     const defaults = gxGetDefaultStorageData();
@@ -61,7 +78,8 @@ export async function loadSidebarStorage(): Promise<{
       settings: defaults.settings,
       activePinId: null,
       sidebarHidden: false,
-      panelWidth: GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth
+      panelWidth: GX_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
+      panelSession: { open: false, pinId: null }
     };
   }
 }

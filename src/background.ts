@@ -24,9 +24,27 @@ import type { Pin, Settings } from './lib/types';
 
 // --- Extension lifecycle ---
 
+// Allow content scripts to read/write session storage (panel-open state).
+// Re-asserted on every service-worker wake; values persist per browser session.
+void chrome.storage.session
+  ?.setAccessLevel?.({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })
+  .catch(() => {});
+
 // Re-writes pinned-site cookies so panel iframes reuse existing sessions.
 // Registered synchronously so it survives service-worker restarts.
 gxWatchPinnedSiteCookies();
+
+// Mirror session panel-state changes to every tab so the panel stays open
+// (or closed) consistently across all tabs of the browser session.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session' || !changes.gxPanelOpen) {
+    return;
+  }
+  const open = Boolean(changes.gxPanelOpen.newValue);
+  const pinId =
+    typeof changes.gxPanelPinId?.newValue === 'string' ? changes.gxPanelPinId.newValue : null;
+  void broadcastToAllTabs({ action: 'panelStateSynced', open, pinId });
+});
 
 chrome.runtime.onInstalled.addListener(async () => {
   await gxInitializeStorage();
