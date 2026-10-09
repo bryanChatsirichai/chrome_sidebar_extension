@@ -8,14 +8,18 @@ interface AppPanelProps {
   pin: Pin | null;
   panelView: PanelView;
   fallbackPin: Pin | null;
+  /** Changing this remounts the iframe: fresh, pristine frame per navigation. */
+  frameEpoch: number;
+  /** Target URL for the current frame; '' parks the frame on about:blank. */
+  frameSrc: string;
   iframeRef: RefObject<HTMLIFrameElement | null>;
-  resizeDragging: boolean;
+  resizing: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onOpenCompanion: () => void;
+  onOpenInTab: () => void;
   onIframeLoad: () => void;
   onIframeError: () => void;
-  onResizeStart: (event: React.MouseEvent) => void;
+  onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 export function AppPanel({
@@ -23,11 +27,13 @@ export function AppPanel({
   pin,
   panelView,
   fallbackPin,
+  frameEpoch,
+  frameSrc,
   iframeRef,
-  resizeDragging,
+  resizing,
   onClose,
   onRefresh,
-  onOpenCompanion,
+  onOpenInTab,
   onIframeLoad,
   onIframeError,
   onResizeStart
@@ -60,7 +66,9 @@ export function AppPanel({
         </div>
 
         <iframe
+          key={frameEpoch}
           ref={iframeRef}
+          src={frameSrc}
           className={`panel-iframe${panelView === 'iframe' ? '' : ' hidden'}`}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
           title={pin?.name ?? 'Pinned website'}
@@ -77,18 +85,16 @@ export function AppPanel({
             )}
           </div>
           <h3 className="fallback-title">{displayPin?.name}</h3>
-          <p className="fallback-message">
-            This site could not load in the panel. Use the companion window instead.
-          </p>
-          <button className="open-tab-btn" type="button" onClick={onOpenCompanion}>
-            Open companion panel
+          <p className="fallback-message">This site could not load in the panel.</p>
+          <button className="open-tab-btn" type="button" onClick={onOpenInTab}>
+            Open in new tab
           </button>
         </div>
 
         <div
-          className={`resize-handle${resizeDragging ? ' dragging' : ''}`}
+          className={`resize-handle${resizing ? ' dragging' : ''}`}
           title="Drag to resize"
-          onMouseDown={onResizeStart}
+          onPointerDown={onResizeStart}
         />
       </div>
     </section>

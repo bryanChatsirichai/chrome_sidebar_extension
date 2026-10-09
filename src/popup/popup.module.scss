@@ -87,9 +87,7 @@ $gx-text-white: #fff;
     accent-color: $gx-accent;
   }
 
-  #panelWidthValue,
-  #companionWidthValue,
-  #companionHeightValue {
+  #panelWidthValue {
     font-size: 13px;
     color: $gx-text-light;
     min-width: 48px;
@@ -111,10 +109,6 @@ $gx-text-white: #fff;
     background: $gx-bg-panel;
     color: #eee;
     font-size: 13px;
-  }
-
-  .companion-height-row.hidden {
-    display: none;
   }
 
   .pins-list {

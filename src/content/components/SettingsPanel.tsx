@@ -1,7 +1,6 @@
-import { useRef } from 'react';
-import { GX_DEFAULTS } from '../../lib/defaults';
+import { useEffect, useRef, useState } from 'react';
 import { getCurrentPagePinDefaults, resolveIconUrl } from '../../lib/pin-utils';
-import type { CompanionHeightMode, Pin, Settings } from '../../lib/types';
+import type { Pin } from '../../lib/types';
 
 interface PinFormState {
   name: string;
@@ -12,11 +11,9 @@ interface PinFormState {
 interface SettingsPanelProps {
   open: boolean;
   pins: Pin[];
-  settings: Settings;
   panelWidth: number;
   editingPinId: string | null;
   pinForm: PinFormState;
-  companionHeightMode: CompanionHeightMode;
   onClose: () => void;
   onPinFormChange: (form: PinFormState) => void;
   onSavePin: (event: React.FormEvent) => void;
@@ -29,21 +26,16 @@ interface SettingsPanelProps {
   onDragEnd: () => void;
   onDropPin: (index: number) => void;
   onPanelWidthChange: (width: number) => void;
-  onPanelWidthCommit: () => void;
-  onSettingsPatch: (patch: Partial<Settings>) => void;
-  onSettingsCommit: () => void;
-  onSettingsPatchAndCommit: (patch: Partial<Settings>) => void;
+  onPanelWidthCommit: (width: number) => void;
   onReset: () => void;
 }
 
 export function SettingsPanel({
   open,
   pins,
-  settings,
   panelWidth,
   editingPinId,
   pinForm,
-  companionHeightMode,
   onClose,
   onPinFormChange,
   onSavePin,
@@ -57,16 +49,17 @@ export function SettingsPanel({
   onDropPin,
   onPanelWidthChange,
   onPanelWidthCommit,
-  onSettingsPatch,
-  onSettingsCommit,
-  onSettingsPatchAndCommit,
   onReset
 }: SettingsPanelProps) {
   const addFormRef = useRef<HTMLDivElement>(null);
   const currentPage = getCurrentPagePinDefaults();
-  const companionWidth = settings.companionWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionWidth;
-  const companionHeight = settings.companionHeight ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeight;
-  const companionPosition = settings.companionPosition ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionPosition;
+
+  // Slider value is kept in local state so live dragging doesn't re-render the
+  // whole sidebar app; the committed width syncs back through the prop.
+  const [sliderWidth, setSliderWidth] = useState(panelWidth);
+  useEffect(() => {
+    setSliderWidth(panelWidth);
+  }, [panelWidth]);
 
   return (
     <section className={`settings-panel${open ? ' open' : ''}`} part="settings-panel">
@@ -257,81 +250,20 @@ export function SettingsPanel({
               className="settings-width-range"
               type="range"
               min={300}
-              max={600}
+              max={1000}
               step={10}
-              value={panelWidth}
-              onChange={(e) => onPanelWidthChange(Number(e.target.value))}
-              onMouseUp={onPanelWidthCommit}
-              onTouchEnd={onPanelWidthCommit}
+              value={sliderWidth}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setSliderWidth(next);
+                onPanelWidthChange(next);
+              }}
+              onMouseUp={() => onPanelWidthCommit(sliderWidth)}
+              onTouchEnd={() => onPanelWidthCommit(sliderWidth)}
+              onKeyUp={() => onPanelWidthCommit(sliderWidth)}
             />
-            <span className="settings-width-value">{panelWidth}px</span>
+            <span className="settings-width-value">{sliderWidth}px</span>
           </div>
-        </div>
-
-        <div className="settings-section">
-          <h3 className="settings-heading">Companion window</h3>
-          <p className="settings-hint">Popup used when a site cannot load in the panel.</p>
-          <label className="settings-label">Width</label>
-          <div className="settings-width-control">
-            <input
-              className="settings-companion-width-range"
-              type="range"
-              min={300}
-              max={900}
-              step={10}
-              value={companionWidth}
-              onChange={(e) => onSettingsPatch({ companionWidth: Number(e.target.value) })}
-              onMouseUp={onSettingsCommit}
-              onTouchEnd={onSettingsCommit}
-            />
-            <span className="settings-companion-width-value">{companionWidth}px</span>
-          </div>
-          <label className="settings-label">Height</label>
-          <select
-            className="settings-select settings-companion-height-mode"
-            value={companionHeightMode}
-            onChange={(e) =>
-              onSettingsPatchAndCommit({
-                companionHeightMode: e.target.value as Settings['companionHeightMode']
-              })
-            }
-          >
-            <option value="match">Match browser window</option>
-            <option value="fixed">Fixed height</option>
-          </select>
-          <div
-            className={`settings-companion-height-row${companionHeightMode !== 'fixed' ? ' hidden' : ''}`}
-          >
-            <div className="settings-width-control">
-              <input
-                className="settings-companion-height-range"
-                type="range"
-                min={400}
-                max={1200}
-                step={10}
-                value={companionHeight}
-                onChange={(e) => onSettingsPatch({ companionHeight: Number(e.target.value) })}
-                onMouseUp={onSettingsCommit}
-                onTouchEnd={onSettingsCommit}
-              />
-              <span className="settings-companion-height-value">{companionHeight}px</span>
-            </div>
-          </div>
-          <label className="settings-label">Initial position</label>
-          <select
-            className="settings-select settings-companion-position"
-            value={companionPosition}
-            onChange={(e) =>
-              onSettingsPatchAndCommit({
-                companionPosition: e.target.value as Settings['companionPosition']
-              })
-            }
-          >
-            <option value="right">Right of browser window</option>
-            <option value="left">Left of browser window</option>
-            <option value="screen-right">Right edge of screen</option>
-            <option value="screen-left">Left edge of screen</option>
-          </select>
         </div>
 
         <button className="settings-btn settings-btn-secondary settings-reset-btn" type="button" onClick={onReset}>

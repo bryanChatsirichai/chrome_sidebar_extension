@@ -3,7 +3,14 @@
   "name": "GX Sidebar",
   "version": "0.1.0",
   "description": "Opera GX-style sidebar for Chrome — pin web apps and open them beside your page.",
-  "permissions": ["storage", "scripting", "tabs", "windows", "system.display"],
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "windows",
+    "cookies",
+    "declarativeNetRequestWithHostAccess"
+  ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background.ts",

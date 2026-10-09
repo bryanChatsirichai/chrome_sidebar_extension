@@ -1,17 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GX_DEFAULTS, gxClamp, gxIsDomainBlocked } from '../lib/defaults';
+import { GX_DEFAULTS, gxClamp } from '../lib/defaults';
 import { parsePinUrl, reindexPins, resolveIconUrl, getCurrentPagePinDefaults } from '../lib/pin-utils';
-import type { CompanionOpenResult, Pin, Settings } from '../lib/types';
+import type { Pin, Settings } from '../lib/types';
 import { IconStrip } from './components/IconStrip';
 import { AppPanel } from './components/AppPanel';
 import { SettingsPanel } from './components/SettingsPanel';
-import { applyLayoutClasses, setCssVariables } from './sidebarUtils';
+import {
+  applyLayoutClasses,
+  setCssVariables,
+  setPageResizeActive,
+  setPanelWidthCss
+} from './sidebarUtils';
 
 const EMBED_BLOCKED_PATTERN =
-  /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by/i;
+  /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by|err_name_not_resolved|err_connection_refused|err_address_unreachable|err_cert_|err_timed_out/i;
 
 const IFRAME_VERIFY_MAX_ATTEMPTS = 1;
 const IFRAME_VERIFY_RETRY_MS = 100;
+/**
+ * Poll interval for frames whose load event fired while still on about:blank.
+ * The navigation is either mid-commit (heavy sites such as chatgpt.com can
+ * take seconds to commit) or permanently blocked. The poll never fails on its
+ * own: a real commit flips the href, a pin change cancels via a generation
+ * bump, and the IFRAME_LOAD_TIMEOUT_MS net declares failure — failing from
+ * here used to misclassify slow-but-healthy embeds as blocked.
+ */
+const IFRAME_STALL_RETRY_MS = 250;
+/** Post-success watchdog window that catches late-committed error pages. */
+const IFRAME_WATCHDOG_DURATION_MS = 4000;
+const IFRAME_WATCHDOG_INTERVAL_MS = 500;
+/**
+ * Chrome/site error pages have a tiny body; real site content is longer.
+ * Error checks only fire for near-empty frames so live page content (or
+ * inline scripts) mentioning phrases like "failed to load" never triggers a
+ * false embed failure.
+ */
+const IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH = 250;
 
 export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
 
@@ -21,6 +45,8 @@ interface SidebarAppProps {
   initialActivePinId: string | null;
   initialSidebarHidden: boolean;
   initialPanelWidth: number;
+  /** Session-global panel state: the panel reopens on new tabs/navigations. */
+  initialPanelOpen: boolean;
 }
 
 export function SidebarApp({
@@ -28,16 +54,19 @@ export function SidebarApp({
   initialSettings,
   initialActivePinId,
   initialSidebarHidden,
-  initialPanelWidth
+  initialPanelWidth,
+  initialPanelOpen
 }: SidebarAppProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const iframeLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const iframeWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyGenerationRef = useRef(0);
   const embedFailureHandledRef = useRef(false);
-  const embedFailureInFlightRef = useRef<Promise<CompanionOpenResult | undefined> | null>(null);
   const draggedIndexRef = useRef<number | null>(null);
+  const sliderFrameRef = useRef<number | null>(null);
+  const sliderWidthRef = useRef(0);
 
   const [pins, setPins] = useState(initialPins);
   const [settings, setSettings] = useState(initialSettings);
@@ -47,18 +76,39 @@ export function SidebarApp({
   const [sidebarHidden, setSidebarHidden] = useState(initialSidebarHidden);
   const [panelWidth, setPanelWidth] = useState(initialPanelWidth);
   const [panelView, setPanelView] = useState<PanelView>('idle');
+  const [frameEpoch, setFrameEpoch] = useState(0);
+  const [frameSrc, setFrameSrc] = useState('');
   const [fallbackPin, setFallbackPin] = useState<Pin | null>(null);
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
   const [resizeDragging, setResizeDragging] = useState(false);
+  const [sliderResizing, setSliderResizing] = useState(false);
 
   const panelOpenRef = useRef(panelOpen);
   const activePinIdRef = useRef(activePinId);
-  const pinOpenGenerationRef = useRef(0);
+  const pinsRef = useRef(pins);
   const handlePinClickRef = useRef<(pin: Pin) => void>(() => {});
 
   panelOpenRef.current = panelOpen;
   activePinIdRef.current = activePinId;
+  pinsRef.current = pins;
+
+  /**
+   * Persists the panel session to chrome.storage.session (shared by every tab
+   * of this browser session). The background watches it and broadcasts
+   * `panelStateSynced`, so the open/closed panel state follows the user
+   * across tabs and survives same-tab navigations without reopening after a
+   * browser restart.
+   */
+  const persistPanelSession = useCallback((open: boolean, pinId: string | null) => {
+    try {
+      void chrome.storage.session
+        ?.set({ gxPanelOpen: open, gxPanelPinId: open ? pinId : null })
+        .catch(() => {});
+    } catch {
+      // Session storage is unavailable until the background grants access.
+    }
+  }, []);
 
   const getActivePin = useCallback(
     (): Pin | null => pins.find((p) => p.id === activePinId) ?? null,
@@ -79,6 +129,13 @@ export function SidebarApp({
     }
   }, []);
 
+  const clearIframeWatchdog = useCallback(() => {
+    if (iframeWatchdogTimerRef.current) {
+      clearTimeout(iframeWatchdogTimerRef.current);
+      iframeWatchdogTimerRef.current = null;
+    }
+  }, []);
+
   const getIframeLocationHref = useCallback((): string | null => {
     try {
       return iframeRef.current?.contentWindow?.location?.href ?? '';
@@ -87,44 +144,34 @@ export function SidebarApp({
     }
   }, []);
 
-  const getIframeDocumentText = useCallback((): string => {
-    try {
-      const doc = iframeRef.current?.contentDocument;
-      if (!doc) {
-        return '';
-      }
-      return [doc.title, doc.body?.innerText, doc.body?.textContent, doc.documentElement?.textContent]
-        .filter(Boolean)
-        .join('\n');
-    } catch {
-      return '';
-    }
-  }, []);
-
+  /**
+   * Strict error-page check. Unlike a broad text scan, it requires either a
+   * chrome-error: location or a near-empty body, so live site content (or
+   * inline scripts) mentioning phrases like "failed to load" never triggers a
+   * false embed failure — e.g. when the panel shows the same site the user
+   * is browsing and its DOM is readable.
+   */
   const isIframeEmbedBlocked = useCallback((): boolean => {
     const href = getIframeLocationHref();
     if (typeof href === 'string' && href.startsWith('chrome-error:')) {
       return true;
     }
-    return EMBED_BLOCKED_PATTERN.test(getIframeDocumentText());
-  }, [getIframeDocumentText, getIframeLocationHref]);
-
-  const queryEmbedAllowed = useCallback(async (url: string): Promise<boolean> => {
-    if (gxIsDomainBlocked(url)) {
-      return false;
-    }
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'checkEmbedAllowed',
-        url
-      });
-      return Boolean(response?.embedAllowed);
-    } catch (error) {
-      console.warn('[GX Sidebar] Embed preflight failed:', error);
-      return true;
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) {
+        return false;
+      }
+      const text = (doc.body?.innerText ?? '').trim();
+      return (
+        text.length > 0 &&
+        text.length <= IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH &&
+        EMBED_BLOCKED_PATTERN.test(text)
+      );
+    } catch {
+      return false;
     }
-  }, []);
+  }, [getIframeLocationHref]);
 
   const saveAndBroadcast = useCallback(
     async (nextPins: Pin[], nextSettings: Settings, width: number) => {
@@ -139,150 +186,101 @@ export function SidebarApp({
     []
   );
 
-  const openCompanionForPin = useCallback(
-    async (pin: Pin, options: { closePanelOnOpen?: boolean } = {}) => {
-      const { closePanelOnOpen = false } = options;
-      try {
-        const response = await chrome.runtime.sendMessage({
-          action: 'openCompanion',
-          url: pin.url,
-          pinId: pin.id,
-          companionSettings: settings
-        });
-
-        if (!response?.ok) {
-          console.error('[GX Sidebar] Companion panel failed:', response?.error ?? 'Unknown error');
-          return response;
-        }
-
-        if (response.open) {
-          setActivePinId(pin.id);
-          activePinIdRef.current = pin.id;
-        } else {
-          setActivePinId(null);
-          activePinIdRef.current = null;
-        }
-
-        if (closePanelOnOpen && response.open) {
-          clearIframeTimer();
-          clearIframeVerifyTimer();
-          setPanelOpen(false);
-          panelOpenRef.current = false;
-          setPanelView('idle');
-        }
-
-        return response;
-      } catch (error) {
-        console.error('[GX Sidebar] Companion panel failed:', error);
-        return { ok: false, error: String(error) };
-      }
-    },
-    [clearIframeTimer, clearIframeVerifyTimer, settings]
-  );
-
   const showIframeLoaded = useCallback(() => {
     clearIframeTimer();
     clearIframeVerifyTimer();
     setPanelView('iframe');
-    void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
   }, [clearIframeTimer, clearIframeVerifyTimer]);
 
   const showFallbackUI = useCallback(
     (pin: Pin) => {
       clearIframeTimer();
-      if (iframeRef.current) {
-        iframeRef.current.src = 'about:blank';
-      }
+      clearIframeWatchdog();
+      setFrameSrc('');
       setFallbackPin(pin);
       setPanelView('fallback');
     },
-    [clearIframeTimer]
+    [clearIframeTimer, clearIframeWatchdog]
   );
 
+  /**
+   * Embed failure stays in the panel: the fallback view offers an in-panel
+   * "Open in new tab" action; it never opens another window automatically.
+   */
   const handleEmbedFailure = useCallback(
     (pin: Pin) => {
-      if (embedFailureHandledRef.current || embedFailureInFlightRef.current) {
-        return embedFailureInFlightRef.current;
+      if (embedFailureHandledRef.current) {
+        return;
       }
 
       embedFailureHandledRef.current = true;
       iframeVerifyGenerationRef.current += 1;
       clearIframeTimer();
       clearIframeVerifyTimer();
-      if (iframeRef.current) {
-        iframeRef.current.src = 'about:blank';
-      }
-
-      embedFailureInFlightRef.current = (async () => {
-        const response = await openCompanionForPin(pin, { closePanelOnOpen: true });
-        if (response?.ok && response.open) {
-          return response;
-        }
-        setPanelOpen(true);
-        panelOpenRef.current = true;
-        showFallbackUI(pin);
-        return response;
-      })().finally(() => {
-        embedFailureInFlightRef.current = null;
-      });
-
-      return embedFailureInFlightRef.current;
+      clearIframeWatchdog();
+      showFallbackUI(pin);
     },
-    [clearIframeTimer, clearIframeVerifyTimer, openCompanionForPin, showFallbackUI]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, showFallbackUI]
   );
 
-  const openCompanionDirectly = useCallback(
-    async (pin: Pin) => {
-      if (panelOpenRef.current) {
-        clearIframeTimer();
-        clearIframeVerifyTimer();
-        if (iframeRef.current) {
-          iframeRef.current.src = 'about:blank';
-        }
-        setPanelOpen(false);
-        panelOpenRef.current = false;
-        setPanelView('idle');
-      }
+  /**
+   * Watches a successfully loaded frame for a short window afterwards.
+   * Some blocked embeds commit an error page late (after the load event was
+   * already treated as success); the watchdog detects that and shows the
+   * in-panel fallback view instead of leaving a dead frame on screen.
+   */
+  const startIframeWatchdog = useCallback(
+    (pin: Pin, generation: number) => {
+      clearIframeWatchdog();
+      const startedAt = Date.now();
 
-      const response = await openCompanionForPin(pin);
-      if (!response?.ok || !response.open) {
-        setPanelOpen(true);
-        panelOpenRef.current = true;
-        showFallbackUI(pin);
-      }
-      return response;
+      const poll = () => {
+        iframeWatchdogTimerRef.current = null;
+
+        if (
+          generation !== iframeVerifyGenerationRef.current ||
+          embedFailureHandledRef.current ||
+          !panelOpenRef.current ||
+          pin.id !== activePinIdRef.current
+        ) {
+          return;
+        }
+
+        if (Date.now() - startedAt >= IFRAME_WATCHDOG_DURATION_MS) {
+          return;
+        }
+
+        if (isIframeEmbedBlocked()) {
+          void handleEmbedFailure(pin);
+          return;
+        }
+
+        iframeWatchdogTimerRef.current = setTimeout(poll, IFRAME_WATCHDOG_INTERVAL_MS);
+      };
+
+      iframeWatchdogTimerRef.current = setTimeout(poll, IFRAME_WATCHDOG_INTERVAL_MS);
     },
-    [clearIframeTimer, clearIframeVerifyTimer, openCompanionForPin, showFallbackUI]
+    [clearIframeWatchdog, handleEmbedFailure, isIframeEmbedBlocked]
   );
 
   const finalizeIframeSuccess = useCallback(
-    async (pin: Pin, generation: number) => {
-      if (generation !== iframeVerifyGenerationRef.current) {
-        return;
-      }
-
-      const embedAllowed = await queryEmbedAllowed(pin.url);
+    (pin: Pin, generation: number) => {
       if (generation !== iframeVerifyGenerationRef.current) {
         return;
       }
 
       if (
         embedFailureHandledRef.current ||
-        embedFailureInFlightRef.current ||
         !panelOpenRef.current ||
         pin.id !== activePinIdRef.current
       ) {
         return;
       }
 
-      if (!embedAllowed) {
-        void handleEmbedFailure(pin);
-        return;
-      }
-
       showIframeLoaded();
+      startIframeWatchdog(pin, generation);
     },
-    [handleEmbedFailure, queryEmbedAllowed, showIframeLoaded]
+    [showIframeLoaded, startIframeWatchdog]
   );
 
   const verifyIframeEmbed = useCallback(
@@ -292,24 +290,29 @@ export function SidebarApp({
       }
 
       const activePin = pins.find((p) => p.id === activePinId);
-      if (!panelOpen || activePin?.id !== pin.id || embedFailureHandledRef.current || embedFailureInFlightRef.current) {
+      if (!panelOpen || activePin?.id !== pin.id || embedFailureHandledRef.current) {
         return;
       }
 
       if (isIframeEmbedBlocked()) {
-        void handleEmbedFailure(pin);
+        handleEmbedFailure(pin);
         return;
       }
 
       const href = getIframeLocationHref();
 
       if (href === 'about:blank' || href === '') {
-        if (attempt < IFRAME_VERIFY_MAX_ATTEMPTS) {
-          iframeVerifyTimerRef.current = setTimeout(
-            () => verifyIframeEmbed(pin, attempt + 1, generation),
-            IFRAME_VERIFY_RETRY_MS
-          );
-        }
+        // A load event fired while the frame is still on about:blank: either
+        // the navigation is mid-commit (heavy sites can take several seconds
+        // to commit) or the embed was blocked and never will. Keep polling —
+        // a real commit flips the href, a pin change cancels via a generation
+        // bump, and the load-timeout net declares failure for genuinely dead
+        // embeds. Failing fast from here used to misclassify slow-but-healthy
+        // embeds (e.g. chatgpt.com) as blocked.
+        iframeVerifyTimerRef.current = setTimeout(
+          () => verifyIframeEmbed(pin, attempt + 1, generation),
+          IFRAME_STALL_RETRY_MS
+        );
         return;
       }
 
@@ -321,16 +324,16 @@ export function SidebarApp({
           );
           return;
         }
-        void finalizeIframeSuccess(pin, generation);
+        finalizeIframeSuccess(pin, generation);
         return;
       }
 
       if (isIframeEmbedBlocked()) {
-        void handleEmbedFailure(pin);
+        handleEmbedFailure(pin);
         return;
       }
 
-      void finalizeIframeSuccess(pin, generation);
+      finalizeIframeSuccess(pin, generation);
     },
     [
       activePinId,
@@ -353,49 +356,51 @@ export function SidebarApp({
     [clearIframeVerifyTimer, verifyIframeEmbed]
   );
 
+  /**
+   * Opens the panel for a pin by remounting a pristine iframe. Reusing one
+   * frame across cross-origin pins (even via an about:blank reset) made pin
+   * switching flaky; a fresh frame per navigation is deterministic and skips
+   * the reset round-trip entirely.
+   */
   const openPanelForPin = useCallback(
     (pin: Pin) => {
+      persistPanelSession(true, pin.id);
       embedFailureHandledRef.current = false;
-      embedFailureInFlightRef.current = null;
       iframeVerifyGenerationRef.current += 1;
-      setPanelView('loading');
       setFallbackPin(null);
+      setPanelView('loading');
 
       clearIframeTimer();
       clearIframeVerifyTimer();
+      clearIframeWatchdog();
 
-      void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
-
-      if (iframeRef.current) {
-        iframeRef.current.src = pin.url;
-      }
+      setFrameSrc(pin.url);
+      setFrameEpoch((epoch) => epoch + 1);
 
       iframeLoadTimerRef.current = setTimeout(() => {
         if (
           !embedFailureHandledRef.current &&
-          !embedFailureInFlightRef.current &&
           panelOpenRef.current &&
           pin.id === activePinIdRef.current
         ) {
-          void handleEmbedFailure(pin);
+          handleEmbedFailure(pin);
         }
       }, GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
     },
-    [clearIframeTimer, clearIframeVerifyTimer, handleEmbedFailure]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, handleEmbedFailure, persistPanelSession]
   );
 
   const closePanel = useCallback(() => {
+    persistPanelSession(false, null);
     setPanelOpen(false);
     setPanelView('idle');
     embedFailureHandledRef.current = false;
-    embedFailureInFlightRef.current = null;
     iframeVerifyGenerationRef.current += 1;
     clearIframeTimer();
     clearIframeVerifyTimer();
-    if (iframeRef.current) {
-      iframeRef.current.src = 'about:blank';
-    }
-  }, [clearIframeTimer, clearIframeVerifyTimer]);
+    clearIframeWatchdog();
+    setFrameSrc('');
+  }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, persistPanelSession]);
 
   const handlePinClick = useCallback(
     (pin: Pin) => {
@@ -409,50 +414,30 @@ export function SidebarApp({
       }
 
       if (activePinId === pin.id && !panelOpen) {
-        void chrome.runtime.sendMessage({ action: 'closeCompanion' }).then(() => {
-          setActivePinId(null);
-          activePinIdRef.current = null;
-        });
+        setActivePinId(null);
+        activePinIdRef.current = null;
         return;
       }
 
-      const generation = ++pinOpenGenerationRef.current;
       setActivePinId(pin.id);
       activePinIdRef.current = pin.id;
       void chrome.runtime.sendMessage({ action: 'saveLastActivePin', pinId: pin.id });
 
-      void (async () => {
-        const embedAllowed = await queryEmbedAllowed(pin.url);
-        if (generation !== pinOpenGenerationRef.current || pin.id !== activePinIdRef.current) {
-          return;
-        }
-
-        if (!embedAllowed) {
-          await openCompanionDirectly(pin);
-          return;
-        }
-
-        setPanelOpen(true);
-        panelOpenRef.current = true;
-        openPanelForPin(pin);
-      })();
+      // Always try the in-page panel first — the background worker strips
+      // iframe-blocking response headers for pinned domains (embed-bypass.ts).
+      // Sites that still fail show the in-panel fallback view.
+      setPanelOpen(true);
+      panelOpenRef.current = true;
+      openPanelForPin(pin);
     },
-    [
-      activePinId,
-      closePanel,
-      openCompanionDirectly,
-      openPanelForPin,
-      panelOpen,
-      queryEmbedAllowed,
-      settingsOpen
-    ]
+    [activePinId, closePanel, openPanelForPin, panelOpen, settingsOpen]
   );
 
   handlePinClickRef.current = handlePinClick;
 
   const handleIframeLoad = useCallback(() => {
     const pin = getActivePin();
-    if (!pin || !panelOpen || embedFailureHandledRef.current || embedFailureInFlightRef.current) {
+    if (!pin || !panelOpen || embedFailureHandledRef.current) {
       return;
     }
     startIframeVerification(pin);
@@ -460,8 +445,8 @@ export function SidebarApp({
 
   const handleIframeError = useCallback(() => {
     const pin = getActivePin();
-    if (pin && panelOpen && !embedFailureHandledRef.current && !embedFailureInFlightRef.current) {
-      void handleEmbedFailure(pin);
+    if (pin && panelOpen && !embedFailureHandledRef.current) {
+      handleEmbedFailure(pin);
     }
   }, [getActivePin, handleEmbedFailure, panelOpen]);
 
@@ -559,6 +544,7 @@ export function SidebarApp({
       }
 
       let nextPins: Pin[];
+      let reloadActivePanel = false;
 
       if (editingPinId) {
         nextPins = pins.map((pin) =>
@@ -566,12 +552,7 @@ export function SidebarApp({
             ? { ...pin, name, url: parsedUrl.href, iconUrl }
             : pin
         );
-        if (activePinId === editingPinId && panelOpen) {
-          const updated = nextPins.find((p) => p.id === editingPinId);
-          if (updated) {
-            openPanelForPin(updated);
-          }
-        }
+        reloadActivePanel = activePinId === editingPinId && panelOpen;
       } else {
         nextPins = [
           ...pins,
@@ -588,6 +569,13 @@ export function SidebarApp({
       resetPinForm();
       setPins(nextPins);
       await saveAndBroadcast(nextPins, settings, panelWidth);
+
+      if (reloadActivePanel) {
+        const updated = nextPins.find((p) => p.id === editingPinId);
+        if (updated) {
+          openPanelForPin(updated);
+        }
+      }
     },
     [
       activePinId,
@@ -656,34 +644,82 @@ export function SidebarApp({
   }, [closePanel, resetPinForm]);
 
   const handleResizeStart = useCallback(
-    (event: React.MouseEvent) => {
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // Only primary (left/pointer) press initiates a drag resize.
+      if (event.button !== 0) {
+        return;
+      }
       event.preventDefault();
+      const handle = event.currentTarget;
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch {
+        // Capture is best-effort; listeners still work without it.
+      }
       const startX = event.clientX;
       const startWidth = panelWidth;
       let currentWidth = startWidth;
+      let frame: number | null = null;
       setResizeDragging(true);
+      setPageResizeActive(true);
 
-      const onMove = (moveEvent: MouseEvent) => {
+      // Freeze the iframe layout for the whole gesture: it stays at its
+      // pre-gesture width (clipped by the panel's overflow:hidden) and
+      // reflows exactly once when the gesture ends. Per-frame iframe
+      // reflow is what made heavy embeds (chatgpt.com) jank and crash.
+      if (iframeRef.current) {
+        iframeRef.current.style.width = `${startWidth}px`;
+      }
+
+      // Live updates bypass React state entirely: the CSS variable is
+      // written imperatively at most once per animation frame.
+      const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX;
         currentWidth = gxClamp(
-          startWidth + delta,
+          Math.round(startWidth + delta),
           GX_DEFAULTS.PANEL_MIN_WIDTH,
           GX_DEFAULTS.PANEL_MAX_WIDTH
         );
-        setPanelWidth(currentWidth);
+        if (frame === null) {
+          frame = requestAnimationFrame(() => {
+            frame = null;
+            setPanelWidthCss(currentWidth, rootRef.current);
+          });
+        }
       };
 
       const onEnd = () => {
+        if (frame !== null) {
+          cancelAnimationFrame(frame);
+        }
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onEnd);
+        handle.removeEventListener('pointercancel', onEnd);
+        try {
+          if (handle.hasPointerCapture(event.pointerId)) {
+            handle.releasePointerCapture(event.pointerId);
+          }
+        } catch {
+          // Element may already be detached; nothing to release.
+        }
+        setPageResizeActive(false);
         setResizeDragging(false);
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onEnd);
+        // One reflow for the iframe: restore fluid width so it snaps to
+        // the committed panel size.
+        if (iframeRef.current) {
+          iframeRef.current.style.width = '';
+        }
+        // Single React state + storage commit at the end of the gesture.
+        setPanelWidth(currentWidth);
+        setSettings((prev) => ({ ...prev, panelWidth: currentWidth }));
         void chrome.storage.sync.set({
           settings: { ...settings, panelWidth: currentWidth }
         });
       };
 
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onEnd);
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onEnd);
+      handle.addEventListener('pointercancel', onEnd);
     },
     [panelWidth, settings]
   );
@@ -696,8 +732,33 @@ export function SidebarApp({
     applyLayoutClasses(sidebarHidden, panelOpen, settingsOpen);
   }, [panelOpen, settingsOpen, sidebarHidden]);
 
+  /**
+   * Restores the session-global panel state on mount: when the panel was open
+   * in another tab (or before a same-tab navigation), it reopens here with
+   * the same pin so the sidebar feels persistent across tabs.
+   */
   useEffect(() => {
-    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    if (!initialPanelOpen) {
+      return;
+    }
+    const pin =
+      pinsRef.current.find((p) => p.id === activePinIdRef.current) ?? pinsRef.current[0];
+    if (!pin) {
+      return;
+    }
+    setActivePinId(pin.id);
+    activePinIdRef.current = pin.id;
+    void chrome.runtime.sendMessage({ action: 'saveLastActivePin', pinId: pin.id }).catch(() => {});
+    setPanelOpen(true);
+    panelOpenRef.current = true;
+    openPanelForPin(pin);
+    // Mount-only restore; re-running on dependency changes would remount the
+    // panel iframe on every pin/settings update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
       if (message.action === 'setSidebarHidden') {
         setSidebarHidden(Boolean(message.hidden));
         sendResponse({ ok: true, hidden: Boolean(message.hidden) });
@@ -744,9 +805,23 @@ export function SidebarApp({
         sendResponse({ ok: true });
       }
 
-      if (message.action === 'companionClosed') {
-        if (message.pinId === activePinIdRef.current) {
-          setActivePinId(null);
+      if (message.action === 'panelStateSynced') {
+        // Another tab opened/closed the panel: mirror it here. No-op when
+        // already in the target state, which also breaks broadcast loops.
+        if (message.open && typeof message.pinId === 'string') {
+          const pin = pinsRef.current.find((p) => p.id === message.pinId);
+          if (pin && (!panelOpenRef.current || activePinIdRef.current !== message.pinId)) {
+            setActivePinId(pin.id);
+            activePinIdRef.current = message.pinId;
+            void chrome.runtime
+              .sendMessage({ action: 'saveLastActivePin', pinId: message.pinId })
+              .catch(() => {});
+            setPanelOpen(true);
+            panelOpenRef.current = true;
+            openPanelForPin(pin);
+          }
+        } else if (!message.open && panelOpenRef.current) {
+          closePanel();
         }
         sendResponse({ ok: true });
       }
@@ -765,14 +840,15 @@ export function SidebarApp({
 
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, [closePanel, panelWidth, sidebarHidden]);
+  }, [closePanel, openPanelForPin, panelWidth, sidebarHidden]);
 
   const activePin = getActivePin();
-  const companionHeightMode =
-    settings.companionHeightMode ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeightMode;
 
   return (
-    <div ref={rootRef} className={`sidebar-root${sidebarHidden ? ' hidden' : ''}`}>
+    <div
+      ref={rootRef}
+      className={`sidebar-root${sidebarHidden ? ' hidden' : ''}${resizeDragging || sliderResizing ? ' resizing' : ''}`}
+    >
       <IconStrip
         pins={pins}
         activePinId={activePinId}
@@ -786,11 +862,15 @@ export function SidebarApp({
         pin={activePin}
         panelView={panelView}
         fallbackPin={fallbackPin}
+        frameEpoch={frameEpoch}
+        frameSrc={frameSrc}
         iframeRef={iframeRef}
-        resizeDragging={resizeDragging}
+        resizing={resizeDragging || sliderResizing}
         onClose={closePanel}
         onRefresh={() => activePin && openPanelForPin(activePin)}
-        onOpenCompanion={() => activePin && void openCompanionDirectly(activePin)}
+        onOpenInTab={() =>
+          activePin && void chrome.runtime.sendMessage({ action: 'openTab', url: activePin.url }).catch(() => {})
+        }
         onIframeLoad={handleIframeLoad}
         onIframeError={handleIframeError}
         onResizeStart={handleResizeStart}
@@ -799,11 +879,9 @@ export function SidebarApp({
       <SettingsPanel
         open={settingsOpen}
         pins={pins}
-        settings={settings}
         panelWidth={panelWidth}
         editingPinId={editingPinId}
         pinForm={pinForm}
-        companionHeightMode={companionHeightMode}
         onClose={() => setSettingsOpen(false)}
         onPinFormChange={setPinForm}
         onSavePin={(e) => void handleSavePin(e)}
@@ -820,16 +898,37 @@ export function SidebarApp({
         }}
         onDropPin={(index) => void handleDropPin(index)}
         onPanelWidthChange={(width) => {
+          // Live slider updates: CSS variable only, no React state per input
+          // event — the width label lives in SettingsPanel local state.
+          setSliderResizing(true);
+          setPageResizeActive(true);
+          // Lock the iframe at the pre-gesture width on the first change
+          // event of the gesture; reflow happens once on commit.
+          if (iframeRef.current && !iframeRef.current.style.width) {
+            iframeRef.current.style.width = `${panelWidth}px`;
+          }
+          sliderWidthRef.current = width;
+          if (sliderFrameRef.current === null) {
+            sliderFrameRef.current = requestAnimationFrame(() => {
+              sliderFrameRef.current = null;
+              setPanelWidthCss(sliderWidthRef.current, rootRef.current);
+            });
+          }
+        }}
+        onPanelWidthCommit={(width) => {
+          if (sliderFrameRef.current !== null) {
+            cancelAnimationFrame(sliderFrameRef.current);
+            sliderFrameRef.current = null;
+          }
+          // Unlock the iframe so it snaps to the committed panel size.
+          if (iframeRef.current) {
+            iframeRef.current.style.width = '';
+          }
+          setSliderResizing(false);
+          setPageResizeActive(false);
           setPanelWidth(width);
           setSettings((prev) => ({ ...prev, panelWidth: width }));
-        }}
-        onPanelWidthCommit={() => void saveAndBroadcast(pins, { ...settings, panelWidth }, panelWidth)}
-        onSettingsPatch={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
-        onSettingsCommit={() => void saveAndBroadcast(pins, settings, panelWidth)}
-        onSettingsPatchAndCommit={(patch) => {
-          const next = { ...settings, ...patch };
-          setSettings(next);
-          void saveAndBroadcast(pins, next, panelWidth);
+          void saveAndBroadcast(pins, { ...settings, panelWidth: width }, width);
         }}
         onReset={() => void handleReset()}
       />
