@@ -16,81 +16,53 @@ export const GX_DEFAULTS = {
 
   DEFAULT_PINS: [
     {
-      id: 'discord',
-      name: 'Discord',
-      url: 'https://discord.com/app',
-      iconUrl: 'icons/apps/discord.svg',
+      id: 'messenger',
+      name: 'Messenger',
+      url: 'https://www.messenger.com',
+      iconUrl: 'icons/apps/messenger.svg',
       order: 0
-    },
-    {
-      id: 'whatsapp',
-      name: 'WhatsApp',
-      url: 'https://web.whatsapp.com',
-      iconUrl: 'icons/apps/whatsapp.svg',
-      order: 1
-    },
-    {
-      id: 'telegram',
-      name: 'Telegram',
-      url: 'https://web.telegram.org',
-      iconUrl: 'icons/apps/telegram.svg',
-      order: 2
-    },
-    {
-      id: 'twitch',
-      name: 'Twitch',
-      url: 'https://www.twitch.tv',
-      iconUrl: 'icons/apps/twitch.svg',
-      order: 3
-    },
-    {
-      id: 'spotify',
-      name: 'Spotify',
-      url: 'https://open.spotify.com',
-      iconUrl: 'icons/apps/spotify.svg',
-      order: 4
-    },
-    {
-      id: 'x',
-      name: 'X',
-      url: 'https://x.com',
-      iconUrl: 'icons/apps/x.svg',
-      order: 5
     },
     {
       id: 'instagram',
       name: 'Instagram',
       url: 'https://www.instagram.com',
       iconUrl: 'icons/apps/instagram.svg',
-      order: 6
+      order: 1
     },
     {
-      id: 'messenger',
-      name: 'Messenger',
-      url: 'https://www.messenger.com',
-      iconUrl: 'icons/apps/messenger.svg',
-      order: 7
+      id: 'x',
+      name: 'X',
+      url: 'https://x.com',
+      iconUrl: 'icons/apps/x.svg',
+      order: 2
+    },
+    {
+      id: 'youtube',
+      name: 'YouTube',
+      url: 'https://www.youtube.com',
+      iconUrl: 'icons/apps/youtube.svg',
+      order: 3
+    },
+    {
+      id: 'youtube-music',
+      name: 'YouTube Music',
+      url: 'https://music.youtube.com',
+      iconUrl: 'icons/apps/youtube-music.svg',
+      order: 4
     },
     {
       id: 'chatgpt',
       name: 'ChatGPT',
       url: 'https://chatgpt.com',
       iconUrl: 'icons/apps/chatgpt.svg',
-      order: 8
+      order: 5
     },
     {
       id: 'claude',
       name: 'Claude',
       url: 'https://claude.ai',
       iconUrl: 'icons/apps/claude.svg',
-      order: 9
-    },
-    {
-      id: 'example',
-      name: 'Example',
-      url: 'https://example.com',
-      iconUrl: 'icons/apps/example.svg',
-      order: 10
+      order: 6
     }
   ] satisfies Pin[],
 
