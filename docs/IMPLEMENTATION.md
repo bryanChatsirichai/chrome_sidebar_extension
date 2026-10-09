@@ -8,7 +8,7 @@ GX Sidebar is a **Chrome Manifest V3 extension** that mimics Opera GX’s sideba
 
 **Primary UX:**
 1. A fixed **48px icon strip** on the left of every `http(s)` page (hideable via toolbar icon).
-2. An expandable **in-page panel** (300–600px) that loads pinned sites in an `<iframe>`. The panel is tried **first for every pin** — the background service worker strips iframe-blocking response headers (`X-Frame-Options`, CSP `frame-ancestors`) for pinned domains via `declarativeNetRequest`.
+2. An expandable **in-page panel** (300–1000px) that loads pinned sites in an `<iframe>`. The panel is tried **first for every pin** — the background service worker strips iframe-blocking response headers (`X-Frame-Options`, CSP `frame-ancestors`) for pinned domains via `declarativeNetRequest`. See **Embed bypass** below for the full layered strategy.
 3. If a site still can't render in the panel (rare — app-level JS/OAuth anti-framing checks that don't rely on headers), the runtime iframe-verification layer detects the failure and the panel shows an **in-panel fallback view** (pin icon, pin name, "This site could not load in the panel.") with an **Open in new tab** button.
 4. **Inline settings** (gear icon) to add/edit/remove/reorder pins, adjust panel width, and reset to defaults.
 
@@ -30,6 +30,7 @@ flowchart TB
     BG[Message router]
     ST[lib/storage.ts]
     EB[lib/embed-bypass.ts]
+    CA[lib/cookie-auth.ts]
   end
 
   subgraph options [Options page]
@@ -38,6 +39,7 @@ flowchart TB
 
   SA -->|chrome.runtime.sendMessage| BG
   BG --> EB
+  BG --> CA
   BG --> ST
   POP -->|broadcastPinsUpdated| BG
   BG -->|pinsUpdated / setSidebarHidden| SA
@@ -63,7 +65,7 @@ There's no extension API to create a real top-level browsing context docked besi
 | Path | Role |
 |------|------|
 | `manifest.json` | MV3 config; `@crxjs/vite-plugin` builds to `dist/` |
-| `src/background.ts` | Service worker: messaging hub, embed-bypass rule sync, sidebar hide toggle |
+| `src/background.ts` | Service worker: messaging hub, embed-bypass rule sync, cookie relax + watcher, session panel-state broadcast, sidebar hide toggle |
 | `src/content/main.tsx` | Entry: bootstrap, shadow DOM mount, React root |
 | `src/content/SidebarApp.tsx` | Main UI state: pins, panel, iframe verification, settings |
 | `src/content/components/IconStrip.tsx` | Pin buttons + gear |
@@ -75,7 +77,8 @@ There's no extension API to create a real top-level browsing context docked besi
 | `src/content/page-shift.module.scss` | Shifts `html` margin when strip/panel open |
 | `src/lib/defaults.ts` | Constants, default pins |
 | `src/lib/storage.ts` | `chrome.storage.sync` read/write helpers |
-| `src/lib/embed-bypass.ts` | Syncs a `declarativeNetRequest` session rule that strips `X-Frame-Options` / CSP headers for pinned domains (`sub_frame` requests only) |
+| `src/lib/embed-bypass.ts` | Syncs two `declarativeNetRequest` session rules: response-header stripping + `CORP: cross-origin` (rule 1) and `Sec-Fetch-*` spoofing (rule 2), for `sub_frame` requests to pinned domains |
+| `src/lib/cookie-auth.ts` | Re-writes pinned-site cookies to `sameSite: 'no_restriction'` + `cookies.onChanged` watcher so panel iframes reuse existing sessions |
 | `src/lib/pin-utils.ts` | Icon URL resolution, URL parsing, pin reindexing, `getCurrentPagePinDefaults()` |
 | `src/lib/types.ts` | Shared TypeScript interfaces |
 | `src/popup/*` | Full-page options UI (`options_ui`); mirrors inline settings |
@@ -88,13 +91,14 @@ There's no extension API to create a real top-level browsing context docked besi
 ## Permissions
 
 ```json
-["storage", "scripting", "tabs", "windows", "declarativeNetRequestWithHostAccess"]
+["storage", "scripting", "tabs", "windows", "cookies", "declarativeNetRequestWithHostAccess"]
 ```
 
 - `storage` — pins/settings in `chrome.storage.sync`; panel open state (`gxPanelOpen`, `gxPanelPinId`) in `chrome.storage.session`
 - `scripting` — fallback inject when toolbar click hits a tab without content script
 - `tabs` — `openTab` message (open a pin's URL in a new tab); sidebar hide broadcast
-- `declarativeNetRequestWithHostAccess` — lets the background worker strip `X-Frame-Options` / CSP response headers for pinned domains (`lib/embed-bypass.ts`); requires the existing `<all_urls>` host permission
+- `cookies` — re-writes pinned-site cookies with `sameSite: 'no_restriction'` so panel iframes reuse existing sessions (`lib/cookie-auth.ts`)
+- `declarativeNetRequestWithHostAccess` — lets the background worker strip `X-Frame-Options` / CSP response headers and rewrite `Sec-Fetch-*` request headers for pinned domains (`lib/embed-bypass.ts`); requires the existing `<all_urls>` host permission
 - `host_permissions: ["<all_urls>"]` — content scripts on all normal pages; also backs the header-stripping rule above
 
 ---
@@ -117,7 +121,7 @@ There's no extension API to create a real top-level browsing context docked besi
 
 ```ts
 {
-  panelWidth: 400,
+  panelWidth: 600,
   theme: 'dark'
 }
 ```
@@ -136,9 +140,9 @@ There's no extension API to create a real top-level browsing context docked besi
 ### Defaults
 
 Defined in `src/lib/defaults.ts`:
-- `GX_DEFAULTS.DEFAULT_PINS` — 11 default apps (Discord, WhatsApp, Telegram, Twitch, Spotify, X, Instagram, Messenger, ChatGPT, Claude, Example)
-- `GX_DEFAULTS.BLOCKED_DOMAINS` — known iframe blockers (fast-path before header fetch); includes Twitch, ChatGPT, Claude, Spotify, YouTube, etc.
-- `GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS` — 5000ms fallback timer
+- `GX_DEFAULTS.DEFAULT_PINS` — 7 default apps (Messenger, Instagram, X, YouTube, YouTube Music, ChatGPT, Claude)
+- `GX_DEFAULTS.PANEL_MIN_WIDTH` / `PANEL_MAX_WIDTH` / `PANEL_WIDTH` — 300 / 1000 / 600px panel sizing limits
+- `GX_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS` — 15000ms embed-failure net
 
 ---
 
@@ -162,6 +166,18 @@ Injected once per top-level frame into `#gx-sidebar-host` with **closed Shadow D
 - `html.gx-sidebar-hidden` → `margin-left: 0` (strip hidden via toolbar)
 
 CSS variables `--gx-strip-width` and `--gx-panel-width` are set on `document.documentElement` by `setCssVariables()`.
+
+### Panel resize (live width gestures)
+
+The panel width is changed two ways: dragging the `.resize-handle` on the panel's right edge, or the width slider in settings. Both gestures share one architecture designed to keep the embedded site stable while the panel resizes.
+
+**Pointer capture, not document listeners.** The handle's `onPointerDown` starts the drag and calls `setPointerCapture` on the handle element; `pointermove` / `pointerup` / `pointercancel` are attached to the handle, not `document`. Cross-origin iframes swallow document-level `mousemove` events, and pointer capture keeps delivering events even when the cursor leaves the window mid-drag.
+
+**Iframe width-lock.** During any resize gesture (handle drag OR slider), the iframe is frozen at its pre-gesture width via inline `style.width` (clipped by the panel's `overflow: hidden`), and `.sidebar-root.resizing .panel-iframe { pointer-events: none }` stops the embed from eating input. The embed reflows **exactly once, on release** — per-frame iframe reflow is what made heavy embeds (chatgpt.com) jank and crash. On release the inline width is cleared so the frame snaps to the committed panel size.
+
+**CSS variable only during the gesture.** Live width updates never touch React state: they write the `--gx-panel-width` CSS variable imperatively through a single `requestAnimationFrame` throttle (`sliderFrameRef` / `sliderWidthRef` for the slider path, a local `frame` ref for the drag path), so the sidebar tree — including the embed iframe — does not re-render on every pointer event. React state and `chrome.storage.sync` commit once at gesture end (`onPanelWidthCommit` / drag `onEnd`).
+
+**Page tracking.** `.resize-handle` has `touch-action: none` (pointer events instead of touch scrolling), `.app-panel` has `contain: layout paint` (cheap layout containment during the gesture), and the host page gets the `gx-resizing` class for the duration, which disables the `margin-left 0.2s` transition so the shifted page tracks the cursor 1:1 instead of rubber-banding.
 
 ### Keyboard isolation
 
@@ -189,41 +205,10 @@ Called directly on every pin click — no preflight gate.
 
 1. Reset embed-failure guards (`embedFailureHandled`, `embedFailureInFlight`, verify generation).
 2. Show loading spinner and set `iframe.src = pin.url`.
-3. Start **5s timeout** → `handleEmbedFailure` if load/verification still failing (runtime fallback).
+3. Start **15s timeout** (`IFRAME_LOAD_TIMEOUT_MS`) → `handleEmbedFailure` if load/verification still failing (runtime fallback).
 4. On iframe `load` → `startIframeVerification`.
 
-### 3. Iframe embed detection
-
-Embedding is handled in **two layers**:
-
-#### Layer A — Network-level header bypass (`lib/embed-bypass.ts`)
-
-The background service worker keeps a single `declarativeNetRequest` **session rule** in sync with the current pin list. For `sub_frame` (iframe) requests to pinned hostnames, the rule removes:
-- `X-Frame-Options`
-- `Content-Security-Policy` (carries `frame-ancestors`)
-- `Content-Security-Policy-Report-Only`
-- `X-Content-Security-Policy` (legacy)
-
-Re-synced on `onInstalled`, `onStartup`, and whenever pins change via `broadcastPinsUpdated` / `resetStorage`. Only `sub_frame` requests are affected — normal top-level navigation is untouched.
-
-#### Layer B — Runtime iframe verification (`verifyIframeEmbed`)
-
-Polls after load with a **generation counter** (`iframeVerifyGeneration`) so stale timers from previous loads/retries are ignored. This is the safety net for sites that still refuse to render even without blocking headers (JS-based or server-side anti-framing, mostly OAuth/sign-in flows).
-
-Detection paths:
-- `chrome-error:` in iframe location (when readable)
-- Error text in iframe document (`refused to connect`, `content is blocked`, etc.)
-- **`about:blank` stuck** after max retries → treat as failure (no infinite loading)
-- Cross-origin opaque frame (`location.href` throws → `null`) → treated as success via `finalizeIframeSuccess` (expected for a genuine cross-origin load)
-
-**Success** → `showIframeLoaded()`:
-- Hides loading, shows iframe
-
-**Runtime failure** (panel already open) → `handleEmbedFailure()` (single-flight guarded):
-- Stops the spinner and shows the **in-panel fallback view**: pin icon, pin name, and a "This site could not load in the panel." message
-- The fallback view's **Open in new tab** button sends the `openTab` message → `background.ts` → `chrome.tabs.create`
-
-### 4. Settings (gear icon)
+### 3. Settings (gear icon)
 
 Opens `SettingsPanel` (same width as app panel). Closes app panel when opened.
 
@@ -240,11 +225,69 @@ Icon strip footer has **gear (settings) only** — no separate “+” button on
 
 `saveAndBroadcast()` writes to `chrome.storage.sync` and sends `broadcastPinsUpdated` → all tabs re-render strip; the background also re-syncs embed-bypass rules.
 
-### 5. Toolbar icon click (`background.ts`)
+### 4. Toolbar icon click (`background.ts`)
 
 Toggles `sidebarHidden` in sync storage and broadcasts `setSidebarHidden` to all tabs. On failure (content script not loaded), fallback `executeScript` injects the content script.
 
 **Guard:** `isInjectableUrl()` — skips `chrome://`, `about:`, etc.
+
+---
+
+## Embed bypass — how sites that normally block iframes are made to work
+
+The sidebar panel embeds pinned sites in a **cross-origin iframe** inside the page — exactly the context many sites actively block. Getting those sites to load is a layered strategy; each layer targets a different kind of block.
+
+### Layer 1 — DNR response-header stripping (`lib/embed-bypass.ts`, rule ID 1)
+
+Sites block embedding with response headers. Chrome enforces them before any page script runs, so they must be stripped from the actual response. The rule strips:
+- `X-Frame-Options` (`DENY` / `SAMEORIGIN`)
+- CSP `frame-ancestors`, delivered via `Content-Security-Policy`, `Content-Security-Policy-Report-Only`, or legacy `X-Content-Security-Policy`
+- `Cross-Origin-Embedder-Policy` (COEP) — stripped so the embedded app's own subresources are not restricted by the response's COEP requirements
+
+Because the extension has `<all_urls>` host permission, a `declarativeNetRequest` **session rule** (fixed ID 1) rewrites `sub_frame` responses for pinned domains. The rule also **sets `Cross-Origin-Resource-Policy: cross-origin`** on the response. That injection is required when the host page enforces COEP `require-corp`: otherwise the iframe load is blocked by the host's COEP policy even with every blocking header already stripped.
+
+### Layer 2 — Fetch-metadata spoofing (`lib/embed-bypass.ts`, rule ID 2)
+
+Some sites detect framing server-side via Fetch Metadata request headers. Meta (messenger.com) is the canonical case: it answers any request carrying `Sec-Fetch-Dest: iframe` with a generic "Your Request Couldn't be Processed" error page (error 1357005).
+
+Rule 2 rewrites `sub_frame` request headers for pinned domains so the navigation looks like a user-typed top-level visit:
+- `Sec-Fetch-Dest: document`
+- `Sec-Fetch-Mode: navigate`
+- `Sec-Fetch-Site: none`
+- `Sec-Fetch-User: ?1`
+- `Referer` removed
+
+Together these match a typed address-bar navigation exactly, so the request carries no sign of being embedded. DNR can set or remove `Sec-Fetch-*` headers but cannot append to them; the "document / navigate / none / ?1 + no Referer" set is the proven production pattern.
+
+Rule 2 is committed in a **separate `updateSessionRules` call** from rule 1 on purpose: if Chrome ever rejects the Sec-Fetch rewrite, the header-strip rule still applies. Both rules are synced by `gxSyncEmbedBypassRules` at `onInstalled`, `onStartup`, `broadcastPinsUpdated` (pin/settings changes), and `resetStorage`.
+
+### Layer 3 — Cookie/session reuse (`lib/cookie-auth.ts`)
+
+The panel iframe is a third-party context: it lives on whatever page the user is browsing, so its requests are cross-site. Chrome does not attach `SameSite=Lax` / `SameSite=Strict` (or unspecified) cookies to cross-site sub-frame requests — signed-in sites like claude.ai would show a login page in the panel even though the browser already holds a valid session.
+
+The `cookies` permission lets the extension re-write pinned-site cookies with `sameSite: 'no_restriction'` via the `chrome.cookies` API (the cookie jar is shared browser-wide, so the iframe reuses the exact session from normal tabs):
+- `gxRelaxPinnedSiteCookies()` — runs at `onInstalled` / `onStartup` / `broadcastPinsUpdated` / `resetStorage`; flips every Secure pinned-domain cookie to `no_restriction` (`no_restriction` requires the Secure attribute).
+- `gxWatchPinnedSiteCookies()` — a top-level `cookies.onChanged` watcher, registered synchronously at worker top level so it survives service-worker wakes. It re-flips cookies when sites re-issue them with restrictive SameSite values (login refreshes, session rotation). Our own re-writes already carry `no_restriction` and are filtered out, so the watcher cannot loop.
+
+### Layer 4 — Runtime verification + graceful failure (`SidebarApp.tsx`)
+
+Even with headers and cookies handled, some sites refuse framing from inside page code (JS frame-busting, app-level checks). The content script detects the failure instead of leaving a dead frame on screen.
+
+Each navigation remounts a **fresh iframe** (`key={frameEpoch}`, controlled `src` prop; `''` parks the frame on `about:blank`). Reusing one frame across cross-origin pins was flaky; a pristine frame per navigation is deterministic and skips the reset round-trip.
+
+Verification pipeline:
+- **15s `IFRAME_LOAD_TIMEOUT_MS`** — the only failure net. If load/verification has not succeeded by then, `handleEmbedFailure` fires.
+- **250ms about:blank stall poll** — a load event while the frame is still on `about:blank` means the navigation is mid-commit (heavy sites like chatgpt.com can take seconds to commit) or permanently blocked. The poll never fails on its own: a real commit flips the href, a pin change cancels via the generation bump, and the 15s timeout declares genuine failure. Failing fast from here used to misclassify slow-but-healthy embeds as blocked.
+- **Strict error-page matching** — an embed counts as blocked only when the frame's location is `chrome-error:`, OR its body `innerText` is **≤250 chars** (`IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH`) AND matches `EMBED_BLOCKED_PATTERN`. Live site content or inline scripts that happen to mention phrases like "failed to load" can never false-positive.
+- **Post-success watchdog** — after a successful load, a **4s window at a 500ms interval** keeps checking. Some blocked embeds commit an error page late, after the load event was already treated as success; the watchdog catches that and shows the fallback view instead of leaving a dead frame on screen.
+
+A genuine failure lands on the **in-panel fallback view**: pin icon, pin name, "This site could not load in the panel.", and an **Open in new tab** button that sends the `openTab` message to the background (`chrome.tabs.create`). No window ever opens automatically.
+
+### Known limits
+
+- **JS frame-busting / app-level checks** (mainly OAuth sign-in flows like Google/Microsoft) can't be fixed by header rewriting — the site detects the embedded context from inside its own scripts. These are exactly the sites that reach the fallback view.
+- **Blocking third-party cookies in Chrome settings** breaks iframe cookies regardless of SameSite rewriting.
+- **Storage partitioning still applies** — localStorage/IndexedDB inside the third-party iframe stays partitioned; cookie-auth only restores cookie-based sessions.
 
 ---
 
@@ -253,11 +296,12 @@ Toggles `sidebarHidden` in sync storage and broadcasts `setSidebarHidden` to all
 | Action | Direction | Handler | Purpose |
 |--------|-----------|---------|---------|
 | `saveLastActivePin` | content → background | `storage.ts` | Persist active pin id |
-| `broadcastPinsUpdated` | popup/settings → background | `background.ts` | Sync pins to all tabs + re-sync embed-bypass rules |
+| `broadcastPinsUpdated` | popup/settings → background | `background.ts` | Sync pins to all tabs + re-sync embed-bypass rules + relax pinned-site cookies |
 | `pinsUpdated` | background → content | `SidebarApp.tsx` | Re-render strip/settings |
 | `setSidebarHidden` | background → content | `SidebarApp.tsx` | Show/hide icon strip |
+| `panelStateSynced` | background → content | `SidebarApp.tsx` | Mirror panel open/close (from session storage) to all tabs |
 | `getStorageData` | popup → background | `storage.ts` | Load pins/settings |
-| `resetStorage` | popup/settings → background | `storage.ts` | Restore defaults + re-sync embed-bypass rules |
+| `resetStorage` | popup/settings → background | `storage.ts` | Restore defaults + re-sync embed-bypass rules + relax pinned-site cookies |
 | `togglePanel` | background → content | `SidebarApp.tsx` | Legacy: open/close active panel |
 | `getState` | popup → content | `SidebarApp.tsx` | Return panel/sidebar state |
 | `openTab` | content → background | `background.ts` | Open URL in new tab |
@@ -289,13 +333,15 @@ All async handlers return `true` from `onMessage` and call `sendResponse` in a p
 | `loadSidebarStorage()` | Initial pins/settings/hidden state |
 | `applyLayoutClasses()` | Toggle `html` margin classes |
 | `setCssVariables()` | Set `--gx-strip-width`, `--gx-panel-width` |
+| `setPanelWidthCss()` | Live width update during drag/slider: writes `--gx-panel-width` imperatively (no React state) |
+| `setPageResizeActive()` | Toggle `gx-resizing` on host page (disables the margin transition mid-gesture) |
 | `injectPageShiftStyles()` | Inject global page-shift CSS once |
 
 ### `lib/embed-bypass.ts`
 
 | Function | Purpose |
 |----------|---------|
-| `gxSyncEmbedBypassRules()` | Recomputes pin hostnames and atomically replaces the single `declarativeNetRequest` session rule that strips iframe-blocking response headers |
+| `gxSyncEmbedBypassRules()` | Recomputes pin hostnames and replaces the two `declarativeNetRequest` session rules — header-strip + `CORP: cross-origin` (rule 1) and `Sec-Fetch-*` spoof (rule 2) — each in its own `updateSessionRules` call |
 
 ### `background.ts`
 
@@ -377,4 +423,4 @@ Edit `HEADERS_TO_STRIP` in `src/lib/embed-bypass.ts` if a site uses another head
 
 ---
 
-*Last updated to reflect: `declarativeNetRequest`-based embed bypass (`lib/embed-bypass.ts`) replacing header-preflight/domain-blocklist gate — in-page panel opens for every pin; failed embeds show an in-panel fallback view with "Open in new tab". The companion popup window has been removed.*
+*Last updated to reflect: four-layer embed bypass — DNR response-header strip + `CORP` injection and `Sec-Fetch-*` spoofing (`lib/embed-bypass.ts`), cookie SameSite relaxation (`lib/cookie-auth.ts`), and runtime verification with the in-panel fallback view — plus the pointer-capture panel-resize architecture. The companion popup window has been removed.*
