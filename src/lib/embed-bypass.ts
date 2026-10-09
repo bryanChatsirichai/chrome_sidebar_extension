@@ -16,13 +16,22 @@ import type { Pin } from './types';
 /** Fixed rule id so re-syncing atomically replaces the previous rule. */
 const EMBED_BYPASS_RULE_ID = 1;
 
-/** Response headers that block iframe embedding when present. */
+/**
+ * Response headers that block iframe embedding when present.
+ * `Cross-Origin-Resource-Policy` is also SET to `cross-origin` so pinned
+ * iframes still load when the page the user is browsing enforces
+ * Cross-Origin-Embedder-Policy (`require-corp`), which otherwise blocks
+ * cross-origin sub-frames that do not opt in via CORP.
+ */
 const HEADERS_TO_STRIP = [
   'X-Frame-Options',
   'Content-Security-Policy',
   'Content-Security-Policy-Report-Only',
   'X-Content-Security-Policy'
 ] as const;
+
+const CORP_HEADER = 'Cross-Origin-Resource-Policy';
+const CORP_VALUE = 'cross-origin';
 
 /** Extracts unique, bare (no `www.`) hostnames from a list of pin URLs. */
 export function gxGetPinHostnames(pins: Pin[]): string[] {
@@ -73,10 +82,17 @@ export async function gxSyncEmbedBypassRules(pins: Pin[]): Promise<void> {
           },
           action: {
             type: 'modifyHeaders' as chrome.declarativeNetRequest.RuleActionType,
-            responseHeaders: HEADERS_TO_STRIP.map((header) => ({
-              header,
-              operation: 'remove' as chrome.declarativeNetRequest.HeaderOperation
-            }))
+            responseHeaders: [
+              ...HEADERS_TO_STRIP.map((header) => ({
+                header,
+                operation: 'remove' as chrome.declarativeNetRequest.HeaderOperation
+              })),
+              {
+                header: CORP_HEADER,
+                operation: 'set' as chrome.declarativeNetRequest.HeaderOperation,
+                value: CORP_VALUE
+              }
+            ]
           }
         }
       ]

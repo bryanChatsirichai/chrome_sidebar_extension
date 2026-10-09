@@ -13,17 +13,23 @@ const EMBED_BLOCKED_PATTERN =
 const IFRAME_VERIFY_MAX_ATTEMPTS = 1;
 const IFRAME_VERIFY_RETRY_MS = 100;
 /**
- * Patience for frames whose load event fired while still on about:blank.
- * A real navigation cancels these polls via a generation bump, so the budget
- * only expires for genuinely blocked/stalled embeds — fail fast to companion
- * instead of waiting for the full load timeout.
+ * Poll interval for frames whose load event fired while still on about:blank.
+ * The navigation is either mid-commit (heavy sites such as chatgpt.com can
+ * take seconds to commit) or permanently blocked. The poll never fails on its
+ * own: a real commit flips the href, a pin change cancels via a generation
+ * bump, and the IFRAME_LOAD_TIMEOUT_MS net declares failure — failing from
+ * here used to misclassify slow-but-healthy embeds as blocked.
  */
-const IFRAME_STALL_MAX_ATTEMPTS = 8;
 const IFRAME_STALL_RETRY_MS = 250;
 /** Post-success watchdog window that catches late-committed error pages. */
 const IFRAME_WATCHDOG_DURATION_MS = 4000;
 const IFRAME_WATCHDOG_INTERVAL_MS = 500;
-/** Chrome error pages have a tiny body; real site content is longer. */
+/**
+ * Chrome/site error pages have a tiny body; real site content is longer.
+ * Error checks only fire for near-empty frames so live page content (or
+ * inline scripts) mentioning phrases like "failed to load" never triggers a
+ * false embed failure.
+ */
 const IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH = 250;
 
 export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
@@ -108,34 +114,14 @@ export function SidebarApp({
     }
   }, []);
 
-  const getIframeDocumentText = useCallback((): string => {
-    try {
-      const doc = iframeRef.current?.contentDocument;
-      if (!doc) {
-        return '';
-      }
-      return [doc.title, doc.body?.innerText, doc.body?.textContent, doc.documentElement?.textContent]
-        .filter(Boolean)
-        .join('\n');
-    } catch {
-      return '';
-    }
-  }, []);
-
-  const isIframeEmbedBlocked = useCallback((): boolean => {
-    const href = getIframeLocationHref();
-    if (typeof href === 'string' && href.startsWith('chrome-error:')) {
-      return true;
-    }
-    return EMBED_BLOCKED_PATTERN.test(getIframeDocumentText());
-  }, [getIframeDocumentText, getIframeLocationHref]);
-
   /**
-   * Strict error-page check for the post-success watchdog. Unlike the broad
-   * load-time pattern, it requires a near-empty body so live site content
-   * mentioning phrases like "failed to load" never triggers a false failure.
+   * Strict error-page check. Unlike a broad text scan, it requires either a
+   * chrome-error: location or a near-empty body, so live site content (or
+   * inline scripts) mentioning phrases like "failed to load" never triggers a
+   * false embed failure — e.g. when the panel shows the same site the user
+   * is browsing and its DOM is readable.
    */
-  const isIframeErrorPage = useCallback((): boolean => {
+  const isIframeEmbedBlocked = useCallback((): boolean => {
     const href = getIframeLocationHref();
     if (typeof href === 'string' && href.startsWith('chrome-error:')) {
       return true;
@@ -150,7 +136,7 @@ export function SidebarApp({
       return (
         text.length > 0 &&
         text.length <= IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH &&
-        /refused to connect|err_[a-z_]+/i.test(text)
+        EMBED_BLOCKED_PATTERN.test(text)
       );
     } catch {
       return false;
@@ -292,7 +278,7 @@ export function SidebarApp({
           return;
         }
 
-        if (isIframeErrorPage()) {
+        if (isIframeEmbedBlocked()) {
           void handleEmbedFailure(pin);
           return;
         }
@@ -302,7 +288,7 @@ export function SidebarApp({
 
       iframeWatchdogTimerRef.current = setTimeout(poll, IFRAME_WATCHDOG_INTERVAL_MS);
     },
-    [clearIframeWatchdog, handleEmbedFailure, isIframeErrorPage]
+    [clearIframeWatchdog, handleEmbedFailure, isIframeEmbedBlocked]
   );
 
   const finalizeIframeSuccess = useCallback(
@@ -345,18 +331,16 @@ export function SidebarApp({
 
       if (href === 'about:blank' || href === '') {
         // A load event fired while the frame is still on about:blank: either
-        // the navigation is mid-commit (a real load cancels these polls via a
-        // generation bump) or the embed was blocked and never committed. Give
-        // it a short budget, then show the fallback view instead of staring
-        // at the spinner until the full load timeout.
-        if (attempt < IFRAME_STALL_MAX_ATTEMPTS) {
-          iframeVerifyTimerRef.current = setTimeout(
-            () => verifyIframeEmbed(pin, attempt + 1, generation),
-            IFRAME_STALL_RETRY_MS
-          );
-          return;
-        }
-        handleEmbedFailure(pin);
+        // the navigation is mid-commit (heavy sites can take several seconds
+        // to commit) or the embed was blocked and never will. Keep polling —
+        // a real commit flips the href, a pin change cancels via a generation
+        // bump, and the load-timeout net declares failure for genuinely dead
+        // embeds. Failing fast from here used to misclassify slow-but-healthy
+        // embeds (e.g. chatgpt.com) as blocked.
+        iframeVerifyTimerRef.current = setTimeout(
+          () => verifyIframeEmbed(pin, attempt + 1, generation),
+          IFRAME_STALL_RETRY_MS
+        );
         return;
       }
 

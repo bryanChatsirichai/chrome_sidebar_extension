@@ -12,7 +12,7 @@ export const GX_DEFAULTS = {
   COMPANION_MAX_HEIGHT: 1200,
   COMPANION_POSITIONS: ['right', 'left', 'screen-right', 'screen-left'] as const,
   COMPANION_HEIGHT_MODES: ['match', 'fixed'] as const,
-  IFRAME_LOAD_TIMEOUT_MS: 5000,
+  IFRAME_LOAD_TIMEOUT_MS: 15000,
 
   DEFAULT_PINS: [
     {
