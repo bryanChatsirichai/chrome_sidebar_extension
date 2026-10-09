@@ -257,7 +257,7 @@ export function SettingsPanel({
               className="settings-width-range"
               type="range"
               min={300}
-              max={600}
+              max={1000}
               step={10}
               value={panelWidth}
               onChange={(e) => onPanelWidthChange(Number(e.target.value))}

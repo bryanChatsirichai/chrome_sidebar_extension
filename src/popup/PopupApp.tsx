@@ -168,7 +168,7 @@ export function PopupApp() {
             type="range"
             id="panelWidth"
             min={300}
-            max={600}
+            max={1000}
             step={10}
             value={settings.panelWidth}
             onChange={(e) => setSettings({ ...settings, panelWidth: Number(e.target.value) })}

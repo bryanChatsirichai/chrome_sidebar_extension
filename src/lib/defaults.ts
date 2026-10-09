@@ -3,9 +3,9 @@ import type { CompanionLayout, Pin, Settings, StorageData } from './types';
 /** Central constants for layout limits, default pins, and embed detection. */
 export const GX_DEFAULTS = {
   STRIP_WIDTH: 48,
-  PANEL_WIDTH: 400,
+  PANEL_WIDTH: 600,
   PANEL_MIN_WIDTH: 300,
-  PANEL_MAX_WIDTH: 600,
+  PANEL_MAX_WIDTH: 1000,
   COMPANION_MIN_WIDTH: 300,
   COMPANION_MAX_WIDTH: 900,
   COMPANION_MIN_HEIGHT: 400,
@@ -67,7 +67,7 @@ export const GX_DEFAULTS = {
   ] satisfies Pin[],
 
   DEFAULT_SETTINGS: {
-    panelWidth: 400,
+    panelWidth: 600,
     theme: 'dark',
     companionWidth: 400,
     companionHeightMode: 'match',
