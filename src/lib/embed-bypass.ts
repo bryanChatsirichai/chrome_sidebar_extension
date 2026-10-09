@@ -3,8 +3,8 @@
  *
  * Many sites refuse iframe embedding by sending `X-Frame-Options` and/or CSP
  * `frame-ancestors` on the document response. Chrome enforces those headers
- * before any page script runs — detecting the block and opening a companion
- * window does not fix it. The headers must be stripped from the response.
+ * before any page script runs — detecting the block and showing an in-panel
+ * fallback does not fix it. The headers must be stripped from the response.
  *
  * Opera GX's native sidebar renders sites in a real top-level browsing context,
  * which is never subject to frame-ancestors. Extensions cannot do that, but

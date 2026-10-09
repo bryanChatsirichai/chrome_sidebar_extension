@@ -151,9 +151,6 @@ export function PopupApp() {
     [pins, settings]
   );
 
-  const companionHeightMode =
-    settings.companionHeightMode ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeightMode;
-
   return (
     <div className="popup-container">
       <header className="popup-header">
@@ -177,97 +174,6 @@ export function PopupApp() {
           />
           <span id="panelWidthValue">{settings.panelWidth}px</span>
         </div>
-      </section>
-
-      <section className="section">
-        <h2>Companion window</h2>
-        <p className="hint">Popup used when a site cannot load in the panel.</p>
-        <label className="field-label" htmlFor="companionWidth">
-          Width
-        </label>
-        <div className="width-control">
-          <input
-            type="range"
-            id="companionWidth"
-            min={300}
-            max={900}
-            step={10}
-            value={settings.companionWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionWidth}
-            onChange={(e) =>
-              setSettings({ ...settings, companionWidth: Number(e.target.value) })
-            }
-            onMouseUp={() =>
-              void updateSettings({ companionWidth: settings.companionWidth })
-            }
-            onTouchEnd={() =>
-              void updateSettings({ companionWidth: settings.companionWidth })
-            }
-          />
-          <span id="companionWidthValue">
-            {settings.companionWidth ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionWidth}px
-          </span>
-        </div>
-        <label className="field-label" htmlFor="companionHeightMode">
-          Height
-        </label>
-        <select
-          id="companionHeightMode"
-          className="field-select"
-          value={companionHeightMode}
-          onChange={(e) =>
-            void updateSettings({
-              companionHeightMode: e.target.value as Settings['companionHeightMode']
-            })
-          }
-        >
-          <option value="match">Match browser window</option>
-          <option value="fixed">Fixed height</option>
-        </select>
-        <div
-          id="companionHeightRow"
-          className={`companion-height-row${companionHeightMode !== 'fixed' ? ' hidden' : ''}`}
-        >
-          <div className="width-control">
-            <input
-              type="range"
-              id="companionHeight"
-              min={400}
-              max={1200}
-              step={10}
-              value={settings.companionHeight ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeight}
-              onChange={(e) =>
-                setSettings({ ...settings, companionHeight: Number(e.target.value) })
-              }
-              onMouseUp={() =>
-                void updateSettings({ companionHeight: settings.companionHeight })
-              }
-              onTouchEnd={() =>
-                void updateSettings({ companionHeight: settings.companionHeight })
-              }
-            />
-            <span id="companionHeightValue">
-              {settings.companionHeight ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeight}px
-            </span>
-          </div>
-        </div>
-        <label className="field-label" htmlFor="companionPosition">
-          Initial position
-        </label>
-        <select
-          id="companionPosition"
-          className="field-select"
-          value={settings.companionPosition ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionPosition}
-          onChange={(e) =>
-            void updateSettings({
-              companionPosition: e.target.value as Settings['companionPosition']
-            })
-          }
-        >
-          <option value="right">Right of browser window</option>
-          <option value="left">Left of browser window</option>
-          <option value="screen-right">Right edge of screen</option>
-          <option value="screen-left">Left edge of screen</option>
-        </select>
       </section>
 
       <section className="section">

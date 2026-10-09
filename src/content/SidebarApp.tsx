@@ -5,7 +5,12 @@ import type { Pin, Settings } from '../lib/types';
 import { IconStrip } from './components/IconStrip';
 import { AppPanel } from './components/AppPanel';
 import { SettingsPanel } from './components/SettingsPanel';
-import { applyLayoutClasses, setCssVariables } from './sidebarUtils';
+import {
+  applyLayoutClasses,
+  setCssVariables,
+  setPageResizeActive,
+  setPanelWidthCss
+} from './sidebarUtils';
 
 const EMBED_BLOCKED_PATTERN =
   /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by|err_name_not_resolved|err_connection_refused|err_address_unreachable|err_cert_|err_timed_out/i;
@@ -60,6 +65,8 @@ export function SidebarApp({
   const iframeVerifyGenerationRef = useRef(0);
   const embedFailureHandledRef = useRef(false);
   const draggedIndexRef = useRef<number | null>(null);
+  const sliderFrameRef = useRef<number | null>(null);
+  const sliderWidthRef = useRef(0);
 
   const [pins, setPins] = useState(initialPins);
   const [settings, setSettings] = useState(initialSettings);
@@ -75,6 +82,7 @@ export function SidebarApp({
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
   const [resizeDragging, setResizeDragging] = useState(false);
+  const [sliderResizing, setSliderResizing] = useState(false);
 
   const panelOpenRef = useRef(panelOpen);
   const activePinIdRef = useRef(activePinId);
@@ -178,43 +186,10 @@ export function SidebarApp({
     []
   );
 
-  const openCompanionForPin = useCallback(
-    async (pin: Pin) => {
-      try {
-        const response = await chrome.runtime.sendMessage({
-          action: 'openCompanion',
-          url: pin.url,
-          pinId: pin.id,
-          companionSettings: settings
-        });
-
-        if (!response?.ok) {
-          console.error('[GX Sidebar] Companion panel failed:', response?.error ?? 'Unknown error');
-          return response;
-        }
-
-        if (response.open) {
-          setActivePinId(pin.id);
-          activePinIdRef.current = pin.id;
-        } else {
-          setActivePinId(null);
-          activePinIdRef.current = null;
-        }
-
-        return response;
-      } catch (error) {
-        console.error('[GX Sidebar] Companion panel failed:', error);
-        return { ok: false, error: String(error) };
-      }
-    },
-    [settings]
-  );
-
   const showIframeLoaded = useCallback(() => {
     clearIframeTimer();
     clearIframeVerifyTimer();
     setPanelView('iframe');
-    void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
   }, [clearIframeTimer, clearIframeVerifyTimer]);
 
   const showFallbackUI = useCallback(
@@ -229,8 +204,8 @@ export function SidebarApp({
   );
 
   /**
-   * Embed failure now stays in the panel: the companion window is manual-only
-   * (header button), never an automatic fallback.
+   * Embed failure stays in the panel: the fallback view offers an in-panel
+   * "Open in new tab" action; it never opens another window automatically.
    */
   const handleEmbedFailure = useCallback(
     (pin: Pin) => {
@@ -246,33 +221,6 @@ export function SidebarApp({
       showFallbackUI(pin);
     },
     [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, showFallbackUI]
-  );
-
-  const openCompanionDirectly = useCallback(
-    async (pin: Pin) => {
-      if (panelOpenRef.current) {
-        clearIframeTimer();
-        clearIframeVerifyTimer();
-        clearIframeWatchdog();
-        iframeVerifyGenerationRef.current += 1;
-        embedFailureHandledRef.current = true;
-        setFrameSrc('');
-        persistPanelSession(false, null);
-        setPanelOpen(false);
-        panelOpenRef.current = false;
-        setPanelView('idle');
-      }
-
-      const response = await openCompanionForPin(pin);
-      if (!response?.ok || !response.open) {
-        persistPanelSession(true, pin.id);
-        setPanelOpen(true);
-        panelOpenRef.current = true;
-        showFallbackUI(pin);
-      }
-      return response;
-    },
-    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, openCompanionForPin, persistPanelSession, showFallbackUI]
   );
 
   /**
@@ -426,8 +374,6 @@ export function SidebarApp({
       clearIframeVerifyTimer();
       clearIframeWatchdog();
 
-      void chrome.runtime.sendMessage({ action: 'closeCompanion' }).catch(() => {});
-
       setFrameSrc(pin.url);
       setFrameEpoch((epoch) => epoch + 1);
 
@@ -468,10 +414,8 @@ export function SidebarApp({
       }
 
       if (activePinId === pin.id && !panelOpen) {
-        void chrome.runtime.sendMessage({ action: 'closeCompanion' }).then(() => {
-          setActivePinId(null);
-          activePinIdRef.current = null;
-        });
+        setActivePinId(null);
+        activePinIdRef.current = null;
         return;
       }
 
@@ -481,8 +425,7 @@ export function SidebarApp({
 
       // Always try the in-page panel first — the background worker strips
       // iframe-blocking response headers for pinned domains (embed-bypass.ts).
-      // Sites that still fail show the in-panel fallback view; the companion
-      // window is manual-only (header button).
+      // Sites that still fail show the in-panel fallback view.
       setPanelOpen(true);
       panelOpenRef.current = true;
       openPanelForPin(pin);
@@ -701,34 +644,82 @@ export function SidebarApp({
   }, [closePanel, resetPinForm]);
 
   const handleResizeStart = useCallback(
-    (event: React.MouseEvent) => {
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // Only primary (left/pointer) press initiates a drag resize.
+      if (event.button !== 0) {
+        return;
+      }
       event.preventDefault();
+      const handle = event.currentTarget;
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch {
+        // Capture is best-effort; listeners still work without it.
+      }
       const startX = event.clientX;
       const startWidth = panelWidth;
       let currentWidth = startWidth;
+      let frame: number | null = null;
       setResizeDragging(true);
+      setPageResizeActive(true);
 
-      const onMove = (moveEvent: MouseEvent) => {
+      // Freeze the iframe layout for the whole gesture: it stays at its
+      // pre-gesture width (clipped by the panel's overflow:hidden) and
+      // reflows exactly once when the gesture ends. Per-frame iframe
+      // reflow is what made heavy embeds (chatgpt.com) jank and crash.
+      if (iframeRef.current) {
+        iframeRef.current.style.width = `${startWidth}px`;
+      }
+
+      // Live updates bypass React state entirely: the CSS variable is
+      // written imperatively at most once per animation frame.
+      const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX;
         currentWidth = gxClamp(
-          startWidth + delta,
+          Math.round(startWidth + delta),
           GX_DEFAULTS.PANEL_MIN_WIDTH,
           GX_DEFAULTS.PANEL_MAX_WIDTH
         );
-        setPanelWidth(currentWidth);
+        if (frame === null) {
+          frame = requestAnimationFrame(() => {
+            frame = null;
+            setPanelWidthCss(currentWidth, rootRef.current);
+          });
+        }
       };
 
       const onEnd = () => {
+        if (frame !== null) {
+          cancelAnimationFrame(frame);
+        }
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onEnd);
+        handle.removeEventListener('pointercancel', onEnd);
+        try {
+          if (handle.hasPointerCapture(event.pointerId)) {
+            handle.releasePointerCapture(event.pointerId);
+          }
+        } catch {
+          // Element may already be detached; nothing to release.
+        }
+        setPageResizeActive(false);
         setResizeDragging(false);
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onEnd);
+        // One reflow for the iframe: restore fluid width so it snaps to
+        // the committed panel size.
+        if (iframeRef.current) {
+          iframeRef.current.style.width = '';
+        }
+        // Single React state + storage commit at the end of the gesture.
+        setPanelWidth(currentWidth);
+        setSettings((prev) => ({ ...prev, panelWidth: currentWidth }));
         void chrome.storage.sync.set({
           settings: { ...settings, panelWidth: currentWidth }
         });
       };
 
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onEnd);
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onEnd);
+      handle.addEventListener('pointercancel', onEnd);
     },
     [panelWidth, settings]
   );
@@ -835,16 +826,6 @@ export function SidebarApp({
         sendResponse({ ok: true });
       }
 
-      if (message.action === 'companionClosed') {
-        // Ignore deselect signals while the in-page panel is open: pin switching
-        // fires closeCompanion before loading the next pin, and the broadcast
-        // can arrive after the new pin is already active.
-        if (message.pinId === activePinIdRef.current && !panelOpenRef.current) {
-          setActivePinId(null);
-        }
-        sendResponse({ ok: true });
-      }
-
       if (message.action === 'getState') {
         sendResponse({
           panelOpen: panelOpenRef.current,
@@ -862,11 +843,12 @@ export function SidebarApp({
   }, [closePanel, openPanelForPin, panelWidth, sidebarHidden]);
 
   const activePin = getActivePin();
-  const companionHeightMode =
-    settings.companionHeightMode ?? GX_DEFAULTS.DEFAULT_SETTINGS.companionHeightMode;
 
   return (
-    <div ref={rootRef} className={`sidebar-root${sidebarHidden ? ' hidden' : ''}`}>
+    <div
+      ref={rootRef}
+      className={`sidebar-root${sidebarHidden ? ' hidden' : ''}${resizeDragging || sliderResizing ? ' resizing' : ''}`}
+    >
       <IconStrip
         pins={pins}
         activePinId={activePinId}
@@ -883,10 +865,12 @@ export function SidebarApp({
         frameEpoch={frameEpoch}
         frameSrc={frameSrc}
         iframeRef={iframeRef}
-        resizeDragging={resizeDragging}
+        resizing={resizeDragging || sliderResizing}
         onClose={closePanel}
         onRefresh={() => activePin && openPanelForPin(activePin)}
-        onOpenCompanion={() => activePin && void openCompanionDirectly(activePin)}
+        onOpenInTab={() =>
+          activePin && void chrome.runtime.sendMessage({ action: 'openTab', url: activePin.url }).catch(() => {})
+        }
         onIframeLoad={handleIframeLoad}
         onIframeError={handleIframeError}
         onResizeStart={handleResizeStart}
@@ -895,11 +879,9 @@ export function SidebarApp({
       <SettingsPanel
         open={settingsOpen}
         pins={pins}
-        settings={settings}
         panelWidth={panelWidth}
         editingPinId={editingPinId}
         pinForm={pinForm}
-        companionHeightMode={companionHeightMode}
         onClose={() => setSettingsOpen(false)}
         onPinFormChange={setPinForm}
         onSavePin={(e) => void handleSavePin(e)}
@@ -916,16 +898,37 @@ export function SidebarApp({
         }}
         onDropPin={(index) => void handleDropPin(index)}
         onPanelWidthChange={(width) => {
+          // Live slider updates: CSS variable only, no React state per input
+          // event — the width label lives in SettingsPanel local state.
+          setSliderResizing(true);
+          setPageResizeActive(true);
+          // Lock the iframe at the pre-gesture width on the first change
+          // event of the gesture; reflow happens once on commit.
+          if (iframeRef.current && !iframeRef.current.style.width) {
+            iframeRef.current.style.width = `${panelWidth}px`;
+          }
+          sliderWidthRef.current = width;
+          if (sliderFrameRef.current === null) {
+            sliderFrameRef.current = requestAnimationFrame(() => {
+              sliderFrameRef.current = null;
+              setPanelWidthCss(sliderWidthRef.current, rootRef.current);
+            });
+          }
+        }}
+        onPanelWidthCommit={(width) => {
+          if (sliderFrameRef.current !== null) {
+            cancelAnimationFrame(sliderFrameRef.current);
+            sliderFrameRef.current = null;
+          }
+          // Unlock the iframe so it snaps to the committed panel size.
+          if (iframeRef.current) {
+            iframeRef.current.style.width = '';
+          }
+          setSliderResizing(false);
+          setPageResizeActive(false);
           setPanelWidth(width);
           setSettings((prev) => ({ ...prev, panelWidth: width }));
-        }}
-        onPanelWidthCommit={() => void saveAndBroadcast(pins, { ...settings, panelWidth }, panelWidth)}
-        onSettingsPatch={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
-        onSettingsCommit={() => void saveAndBroadcast(pins, settings, panelWidth)}
-        onSettingsPatchAndCommit={(patch) => {
-          const next = { ...settings, ...patch };
-          setSettings(next);
-          void saveAndBroadcast(pins, next, panelWidth);
+          void saveAndBroadcast(pins, { ...settings, panelWidth: width }, width);
         }}
         onReset={() => void handleReset()}
       />

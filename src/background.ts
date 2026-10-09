@@ -1,17 +1,7 @@
 /**
  * Service worker: extension lifecycle, toolbar toggle, and message routing
- * between popup, content scripts, and the companion window manager.
+ * between popup, content scripts, and the sidebar panel.
  */
-import {
-  gxCloseCompanion,
-  gxIsCompanionWindow,
-  gxIsCompanionWindowAsync,
-  gxNavigateWithinCompanionWindow,
-  gxOpenOrNavigateCompanion,
-  gxRestoreCompanionState,
-  gxUpdateCompanionLayout
-} from './lib/companion';
-import { gxGetCompanionLayoutFromSettings } from './lib/defaults';
 import { gxSyncEmbedBypassRules } from './lib/embed-bypass';
 import { gxRelaxPinnedSiteCookies, gxWatchPinnedSiteCookies } from './lib/cookie-auth';
 import {
@@ -48,14 +38,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await gxInitializeStorage();
-  await gxRestoreCompanionState();
   const data = await gxGetStorageData();
   await gxSyncEmbedBypassRules(data.pins);
   await gxRelaxPinnedSiteCookies(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await gxRestoreCompanionState();
   const data = await gxGetStorageData();
   await gxSyncEmbedBypassRules(data.pins);
   await gxRelaxPinnedSiteCookies(data.pins);
@@ -103,78 +91,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.action === 'getSidebarContext') {
-    void (async () => {
-      let windowId = sender.tab?.windowId;
-      if (!windowId && sender.tab?.id) {
-        const tab = await chrome.tabs.get(sender.tab.id);
-        windowId = tab.windowId;
-      }
-      sendResponse({ isCompanionWindow: await gxIsCompanionWindowAsync(windowId) });
-    })();
-    return true;
-  }
-
-  if (message.action === 'openCompanion' && message.url && message.pinId) {
-    void (async () => {
-      try {
-        let anchorWindowId = sender.tab?.windowId;
-        const tabId = sender.tab?.id;
-
-        if (!anchorWindowId && tabId) {
-          const tab = await chrome.tabs.get(tabId);
-          anchorWindowId = tab.windowId;
-        }
-
-        if (!anchorWindowId) {
-          sendResponse({ ok: false, error: 'No anchor window' });
-          return;
-        }
-
-        let result;
-
-        if (await gxIsCompanionWindowAsync(anchorWindowId)) {
-          result = await gxNavigateWithinCompanionWindow(tabId!, message.url, message.pinId);
-        } else {
-          const data = await gxGetStorageData();
-          const layout = gxGetCompanionLayoutFromSettings({
-            ...data.settings,
-            ...(message.companionSettings ?? message.companionLayout ?? {})
-          });
-
-          result = await gxOpenOrNavigateCompanion({
-            url: message.url,
-            pinId: message.pinId,
-            anchorWindowId,
-            layout
-          });
-        }
-
-        if (result.open && result.pinId) {
-          await gxSaveLastActivePinId(result.pinId);
-        }
-
-        sendResponse(result);
-      } catch (error) {
-        console.error('[GX Sidebar] openCompanion failed:', error);
-        sendResponse({ ok: false, error: String(error) });
-      }
-    })();
-    return true;
-  }
-
-  if (message.action === 'closeCompanion') {
-    void (async () => {
-      const senderWindowId = sender.tab?.windowId;
-      if (gxIsCompanionWindow(senderWindowId)) {
-        sendResponse({ ok: true, open: true, skipped: true });
-        return;
-      }
-      sendResponse(await gxCloseCompanion());
-    })();
-    return true;
-  }
-
   if (message.action === 'saveLastActivePin' && message.pinId) {
     void gxSaveLastActivePinId(message.pinId).then(() => sendResponse({ ok: true }));
     return true;
@@ -189,9 +105,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then(() => {
         const tasks: Promise<unknown>[] = [];
-        if (message.settings) {
-          tasks.push(gxUpdateCompanionLayout(gxGetCompanionLayoutFromSettings(message.settings)));
-        }
         if (nextPins) {
           tasks.push(gxSyncEmbedBypassRules(nextPins));
           tasks.push(gxRelaxPinnedSiteCookies(nextPins));

@@ -35,6 +35,16 @@ $gx-text-white: #fff;
     display: none;
   }
 
+  /* Live resize gesture: no width transitions, no text selection. */
+  .sidebar-root.resizing * {
+    transition: none;
+  }
+
+  .sidebar-root.resizing {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
   .sidebar-root > * {
     pointer-events: auto;
   }
@@ -175,6 +185,7 @@ $gx-text-white: #fff;
     display: flex;
     flex-direction: column;
     transition: width 0.2s ease;
+    contain: layout paint;
   }
 
   .app-panel.open {
@@ -540,16 +551,12 @@ $gx-text-white: #fff;
     gap: 12px;
   }
 
-  .settings-width-range,
-  .settings-companion-width-range,
-  .settings-companion-height-range {
+  .settings-width-range {
     flex: 1;
     accent-color: $gx-accent;
   }
 
-  .settings-width-value,
-  .settings-companion-width-value,
-  .settings-companion-height-value {
+  .settings-width-value {
     font-size: 12px;
     color: $gx-text-light;
     min-width: 44px;
@@ -570,10 +577,6 @@ $gx-text-white: #fff;
     background: $gx-bg-panel;
     color: #eee;
     font-size: 12px;
-  }
-
-  .settings-companion-height-row.hidden {
-    display: none;
   }
 
   .panel-header {
@@ -639,6 +642,12 @@ $gx-text-white: #fff;
 
   .panel-iframe.hidden {
     display: none;
+  }
+
+  /* Live resize gesture: the frame is width-locked (JS sets inline
+     width) and must not eat pointer events while dragging. */
+  .sidebar-root.resizing .panel-iframe {
+    pointer-events: none;
   }
 
   .fallback-view {
@@ -716,6 +725,7 @@ $gx-text-white: #fff;
     cursor: col-resize;
     background: transparent;
     transition: background 0.15s ease;
+    touch-action: none;
   }
 
   .resize-handle:hover,

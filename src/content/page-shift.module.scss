@@ -17,4 +17,11 @@
   html.gx-sidebar-hidden {
     margin-left: 0 !important;
   }
+
+  /* Live resize: no margin transition, the page must track the cursor 1:1. */
+  html.gx-resizing,
+  html.gx-resizing.gx-sidebar-open,
+  html.gx-resizing.gx-sidebar-strip-visible {
+    transition: none;
+  }
 }

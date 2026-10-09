@@ -7,7 +7,6 @@ import {
 } from './keyboardIsolation';
 import {
   injectPageShiftStyles,
-  isCompanionContext,
   loadSidebarStorage
 } from './sidebarUtils';
 import sidebarStyles from './sidebar.module.scss?inline';
@@ -22,10 +21,6 @@ void (async function initGxSidebar(): Promise<void> {
   }
 
   injectPageShiftStyles();
-
-  if (await isCompanionContext()) {
-    return;
-  }
 
   const storage = await loadSidebarStorage();
 

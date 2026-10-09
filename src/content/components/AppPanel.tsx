@@ -13,13 +13,13 @@ interface AppPanelProps {
   /** Target URL for the current frame; '' parks the frame on about:blank. */
   frameSrc: string;
   iframeRef: RefObject<HTMLIFrameElement | null>;
-  resizeDragging: boolean;
+  resizing: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onOpenCompanion: () => void;
+  onOpenInTab: () => void;
   onIframeLoad: () => void;
   onIframeError: () => void;
-  onResizeStart: (event: React.MouseEvent) => void;
+  onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 export function AppPanel({
@@ -30,10 +30,10 @@ export function AppPanel({
   frameEpoch,
   frameSrc,
   iframeRef,
-  resizeDragging,
+  resizing,
   onClose,
   onRefresh,
-  onOpenCompanion,
+  onOpenInTab,
   onIframeLoad,
   onIframeError,
   onResizeStart
@@ -49,18 +49,6 @@ export function AppPanel({
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M23 4v6h-6M1 20v-6h6" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          </button>
-          <button
-            className="panel-action-btn companion-btn"
-            type="button"
-            title="Open in companion window"
-            onClick={onOpenCompanion}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
             </svg>
           </button>
           <button className="panel-action-btn close-btn" type="button" title="Close panel" onClick={onClose}>
@@ -97,18 +85,16 @@ export function AppPanel({
             )}
           </div>
           <h3 className="fallback-title">{displayPin?.name}</h3>
-          <p className="fallback-message">
-            This site could not load in the panel. Use the companion window instead.
-          </p>
-          <button className="open-tab-btn" type="button" onClick={onOpenCompanion}>
-            Open companion panel
+          <p className="fallback-message">This site could not load in the panel.</p>
+          <button className="open-tab-btn" type="button" onClick={onOpenInTab}>
+            Open in new tab
           </button>
         </div>
 
         <div
-          className={`resize-handle${resizeDragging ? ' dragging' : ''}`}
+          className={`resize-handle${resizing ? ' dragging' : ''}`}
           title="Drag to resize"
-          onMouseDown={onResizeStart}
+          onPointerDown={onResizeStart}
         />
       </div>
     </section>
