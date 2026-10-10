@@ -11,9 +11,12 @@
     transition: margin-left 0.2s ease;
   }
 
+  /* The open panel OVERLAYS the page (Opera-GX popover style): it must not
+     push the main content, so the page-level shift stays at strip width.
+     The panel itself lives inside the sidebar shadow host. */
   html.browser-sidebar-open {
-    margin-left: calc(var(--browser-sidebar-strip-width) + var(--browser-sidebar-panel-width));
-    --browser-sidebar-shift: calc(var(--browser-sidebar-strip-width) + var(--browser-sidebar-panel-width));
+    margin-left: var(--browser-sidebar-strip-width);
+    --browser-sidebar-shift: var(--browser-sidebar-strip-width);
     transition: margin-left 0.2s ease;
   }
 

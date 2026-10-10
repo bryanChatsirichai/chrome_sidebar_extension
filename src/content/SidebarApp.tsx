@@ -740,6 +740,57 @@ export function SidebarApp({
   }, [panelOpen, settingsOpen, sidebarHidden]);
 
   /**
+   * Overlay mode: a click on the page outside the sidebar closes the open
+   * panel. Clicks inside the closed shadow root (strip, panel, resize
+   * handle) are retargeted to the host element, so any other target is
+   * outside; clicks inside the cross-origin panel iframe never reach this
+   * document, so interacting with the embed never dismisses it.
+   */
+  useEffect(() => {
+    if (!panelOpen && !settingsOpen) {
+      return;
+    }
+    const onOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      const host = document.getElementById('browser-sidebar-host');
+      if (target && host && (target === host || host.contains(target))) {
+        return;
+      }
+      if (panelOpen) {
+        closePanel();
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('click', onOutsideClick, true);
+    return () => document.removeEventListener('click', onOutsideClick, true);
+  }, [panelOpen, settingsOpen, closePanel]);
+
+  /**
+   * Scroll isolation for sidebar chrome: wheel events over non-scrollable
+   * sidebar surfaces (panel header, fallback view, resize handle, strip
+   * padding) must not scroll the host page underneath. Scrollable surfaces
+   * (.icon-strip, .settings-body) contain their own overscroll via CSS;
+   * wheel events inside the panel iframe never cross the frame boundary,
+   * so the embed's scrolling is isolated by frameScrollGuard.ts instead.
+   */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const onWheel = (event: WheelEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.icon-strip, .settings-body')) {
+        return; // self-contained scrollers (overscroll-behavior: contain)
+      }
+      event.preventDefault();
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, []);
+
+  /**
    * Restores the session-global panel state on mount: when the panel was open
    * in another tab (or before a same-tab navigation), it reopens here with
    * the same pin so the sidebar feels persistent across tabs.

@@ -39,6 +39,12 @@
       "js": ["src/content/main.tsx"],
       "run_at": "document_start",
       "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/frameScrollGuard.ts"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [

@@ -58,24 +58,21 @@ let resweepTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRecords: MutationRecord[] = [];
 
 /**
- * Numeric shift width. Computed from the page-shift classes plus the inline
- * `--browser-sidebar-panel-width` (always a plain px value) — NOT from the
- * computed `--browser-sidebar-shift`, whose open-state value is a calc()
- * token stream ("calc(48px + 600px)") that parseFloat() cannot read.
+ * Numeric shift width. The panel overlays the page, so the page-level shift
+ * is always the strip width; only the strip needs to be cleared of fixed
+ * elements. Computed from the page-shift classes — NOT from the computed
+ * `--browser-sidebar-shift` (unregistered custom properties keep their
+ * calc() token form, which parseFloat() cannot read).
  */
 function currentShiftPx(): number {
   const html = document.documentElement;
   if (html.classList.contains('browser-sidebar-hidden')) {
     return 0;
   }
-  if (html.classList.contains('browser-sidebar-open')) {
-    const panel = parseFloat(html.style.getPropertyValue('--browser-sidebar-panel-width'));
-    return (
-      BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH +
-      (Number.isFinite(panel) ? panel : BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth)
-    );
-  }
-  if (html.classList.contains('browser-sidebar-strip-visible')) {
+  if (
+    html.classList.contains('browser-sidebar-open') ||
+    html.classList.contains('browser-sidebar-strip-visible')
+  ) {
     return BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH;
   }
   return 0;

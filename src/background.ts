@@ -119,6 +119,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'shouldGuardScroll') {
+    // Sub-frame guard (frameScrollGuard.ts): the frame asks whether its
+    // origin belongs to a pinned site — those embeds get scroll isolation
+    // (overscroll-behavior: contain) so scrolling inside the panel never
+    // chains to the host page.
+    void (async () => {
+      try {
+        const frameUrl = sender.url ?? sender.origin;
+        if (!frameUrl) {
+          sendResponse({ ok: false });
+          return;
+        }
+        const frameOrigin = new URL(frameUrl).origin;
+        const stored = (await chrome.storage.sync.get('pins')) as { pins?: Pin[] };
+        const isPinned = (stored.pins ?? []).some((pin) => {
+          try {
+            return new URL(pin.url).origin === frameOrigin;
+          } catch {
+            return false;
+          }
+        });
+        sendResponse({ ok: isPinned });
+      } catch {
+        sendResponse({ ok: false });
+      }
+    })();
+    return true;
+  }
+
   if (message.action === 'getStorageData') {
     void browserSidebarGetStorageData().then((data) => sendResponse(data));
     return true;

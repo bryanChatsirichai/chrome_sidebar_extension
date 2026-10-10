@@ -62,6 +62,8 @@ $browser-sidebar-text-white: #fff;
     gap: 4px;
     overflow-y: auto;
     overflow-x: hidden;
+    /* Scrolling the strip at its boundary must not chain to the page. */
+    overscroll-behavior: contain;
   }
 
   .icon-strip::-webkit-scrollbar {
@@ -210,6 +212,8 @@ $browser-sidebar-text-white: #fff;
   .settings-body {
     flex: 1;
     overflow-y: auto;
+    /* Boundary scrolling must not chain to the host page. */
+    overscroll-behavior: contain;
     padding: 14px;
     display: flex;
     flex-direction: column;

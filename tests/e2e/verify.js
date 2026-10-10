@@ -41,7 +41,7 @@ let page;
   await page.mouse.click(24, 26);
   await page.waitForTimeout(1200);
 
-  const openState = await readState('panel-open');
+  const openState = await readState('panel-open-overlay');
   console.log(JSON.stringify(openState, null, 2));
 
   // Scroll the page: fixed elements must stay pinned AND stay shifted
@@ -50,13 +50,13 @@ let page;
   const scrollState = await readState('after-scroll-600');
   console.log(JSON.stringify(scrollState, null, 2));
 
-  // Close the panel again (same pin toggles)
-  await page.mouse.click(24, 26);
-  await page.waitForTimeout(1200);
-  const closedState = await readState('panel-closed');
+  // Click on the page (outside the sidebar host / iframe): panel must close
+  await page.mouse.click(900, 600);
+  await page.waitForTimeout(800);
+  const closedState = await readState('closed-by-outside-click');
   console.log(JSON.stringify(closedState, null, 2));
 
-  // Dynamic fixed element added after the fact (SPA-style)
+  // Dynamic fixed element added after the fact (SPA-style), still strip-shifted
   await page.evaluate(() => {
     const el = document.createElement('div');
     el.id = 'late-fixed';
@@ -80,7 +80,6 @@ let page;
   const icb = baseline.clientWidth; // fixed elements lay out against the ICB
   const cornerLeft = icb - 20 - 44; // right: 20, width: 44
   const modalBaseLeft = icb / 2 - 150; // left: 50%, width: 300
-  const panelLeft = 48 + 600; // strip + default panel width
 
   check('strip: page content starts right of strip', baseline.marker.left === 48, baseline.marker);
   check('strip: left-fixed element shifted to 48', near(baseline['fixed-el'].left, 48), baseline['fixed-el']);
@@ -88,19 +87,18 @@ let page;
   check('strip: right-anchored corner button untouched', near(baseline['fixed-corner'].left, cornerLeft), { expected: cornerLeft, actual: baseline['fixed-corner'] });
   check('strip: centered modal beyond strip stays put', near(baseline['fixed-modal'].left, modalBaseLeft), { expected: modalBaseLeft, actual: baseline['fixed-modal'] });
 
-  check('panel: left-fixed element shifted past panel', near(openState['fixed-el'].left, panelLeft), openState['fixed-el']);
-  check('panel: full-width bar left edge at sidebar edge', near(openState['fixed-bar'].left, panelLeft), openState['fixed-bar']);
-  check('panel: full-width bar right edge stays at window edge', Math.abs(openState['fixed-bar'].right - baseline['fixed-bar'].right) <= 2, { open: openState['fixed-bar'], baseline: baseline['fixed-bar'] });
-  check('panel: corner button still untouched', Math.abs(openState['fixed-corner'].left - baseline['fixed-corner'].left) < 2, openState['fixed-corner']);
-  check('panel: page content shifted', near(openState.marker.left, panelLeft), openState.marker);
-  check('panel: centered modal shifted clear of sidebar', near(openState['fixed-modal'].left, modalBaseLeft + panelLeft, 3), openState['fixed-modal']);
+  check('overlay: html class is open', openState.htmlClasses === 'browser-sidebar-open', openState.htmlClasses);
+  check('overlay: page NOT pushed (margin stays strip width)', openState.marginLeft === '48px', openState.marginLeft);
+  check('overlay: page content still at 48', openState.marker.left === 48, openState.marker);
+  check('overlay: fixed elements still at 48', near(openState['fixed-el'].left, 48) && near(openState['fixed-bar'].left, 48), { el: openState['fixed-el'], bar: openState['fixed-bar'] });
+  check('overlay: corner button untouched', Math.abs(openState['fixed-corner'].left - baseline['fixed-corner'].left) < 2, openState['fixed-corner']);
 
   check('scroll: fixed bar still pinned at top', scrollState['fixed-bar'].top === 0, scrollState['fixed-bar']);
   check('scroll: fixed bar still shifted while pinned', scrollState['fixed-bar'].left === openState['fixed-bar'].left, scrollState['fixed-bar']);
   check('scroll: marker scrolled away', scrollState.marker.top < 0, scrollState.marker);
 
-  check('close: back to strip-only shift', near(closedState['fixed-el'].left, 48) && near(closedState['fixed-bar'].left, 48), { el: closedState['fixed-el'], bar: closedState['fixed-bar'] });
-  check('close: page content back to 48', closedState.marker.left === 48, closedState.marker);
+  check('outside click: panel closed', closedState.htmlClasses === 'browser-sidebar-strip-visible', closedState.htmlClasses);
+  check('outside click: page still at 48', closedState.marker.left === 48, closedState.marker);
 
   check('late fixed element swept after mutation', lateState.marked && near(lateState.left, 48), lateState);
 
