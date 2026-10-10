@@ -37,9 +37,18 @@ browserSidebarWatchPinnedSiteCookies();
 // toolbar click, storage change, cookie change) re-triggers this and
 // guarantees the rules exist before the panel needs them.
 void browserSidebarGetStorageData()
-  .then((data) => browserSidebarSyncEmbedBypassRules(data.pins))
+  .then((data) =>
+    (async () => {
+      // Rules first — they gate every panel navigation. Cookie relaxation
+      // second — it re-arms site sessions after crash-restores that never
+      // fired onStartup (the cookies.onChanged watcher covers re-issued
+      // cookies, but the initial flip is needed after browser restart).
+      await browserSidebarSyncEmbedBypassRules(data.pins);
+      await browserSidebarRelaxPinnedSiteCookies(data.pins);
+    })()
+  )
   .catch((error) => {
-    console.warn('[browser-sidebar] Wake-time embed bypass rule re-sync failed:', error);
+    console.warn('[browser-sidebar] Wake-time embed bypass re-sync failed:', error);
   });
 
 // Mirror session panel-state changes to every tab so the panel stays open
@@ -130,6 +139,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return Promise.all(tasks);
       })
       .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.action === 'ensureEmbedRules') {
+    // Panel navigation gate: the content script awaits this response before
+    // pointing the panel iframe at a pinned site, so the sub_frame request
+    // can never beat the DNR session rules out of a just-woken worker.
+    void (async () => {
+      try {
+        const data = await browserSidebarGetStorageData();
+        await browserSidebarSyncEmbedBypassRules(data.pins);
+        await browserSidebarRelaxPinnedSiteCookies(data.pins);
+        sendResponse({ ok: true });
+      } catch (error) {
+        sendResponse({ ok: false, error: String(error) });
+      }
+    })();
     return true;
   }
 

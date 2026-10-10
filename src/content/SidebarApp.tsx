@@ -358,13 +358,29 @@ export function SidebarApp({
   );
 
   /**
+   * Waits until the background worker confirms the embed-bypass DNR session
+   * rules are committed. After a browser restart (especially a crash-restore,
+   * which never fires onStartup) the just-woken worker may still be installing
+   * them — navigating the panel iframe in that window gets the response served
+   * with X-Frame-Options intact ("refused to connect"). Best-effort: on any
+   * messaging failure we still navigate; the 15s load-timeout net guards it.
+   */
+  const ensureEmbedRulesReady = useCallback(async () => {
+    try {
+      await chrome.runtime.sendMessage({ action: 'ensureEmbedRules' });
+    } catch {
+      // Worker unreachable or extension context invalidated — proceed.
+    }
+  }, []);
+
+  /**
    * Opens the panel for a pin by remounting a pristine iframe. Reusing one
    * frame across cross-origin pins (even via an about:blank reset) made pin
    * switching flaky; a fresh frame per navigation is deterministic and skips
    * the reset round-trip entirely.
    */
   const openPanelForPin = useCallback(
-    (pin: Pin) => {
+    async (pin: Pin) => {
       persistPanelSession(true, pin.id);
       embedFailureHandledRef.current = false;
       iframeVerifyGenerationRef.current += 1;
@@ -374,6 +390,10 @@ export function SidebarApp({
       clearIframeTimer();
       clearIframeVerifyTimer();
       clearIframeWatchdog();
+
+      // Gate the navigation on the DNR rules being active — never let the
+      // sub_frame request beat rule installation out of a cold worker.
+      await ensureEmbedRulesReady();
 
       setFrameSrc(pin.url);
       setFrameEpoch((epoch) => epoch + 1);
@@ -388,7 +408,14 @@ export function SidebarApp({
         }
       }, BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
     },
-    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, handleEmbedFailure, persistPanelSession]
+    [
+      clearIframeTimer,
+      clearIframeVerifyTimer,
+      clearIframeWatchdog,
+      ensureEmbedRulesReady,
+      handleEmbedFailure,
+      persistPanelSession
+    ]
   );
 
   const closePanel = useCallback(() => {
