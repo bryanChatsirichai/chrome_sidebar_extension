@@ -2,26 +2,43 @@
   :root {
     --browser-sidebar-strip-width: 48px;
     --browser-sidebar-panel-width: 400px;
+    --browser-sidebar-shift: 0px;
   }
 
   html.browser-sidebar-strip-visible {
     margin-left: var(--browser-sidebar-strip-width);
+    --browser-sidebar-shift: var(--browser-sidebar-strip-width);
     transition: margin-left 0.2s ease;
   }
 
   html.browser-sidebar-open {
     margin-left: calc(var(--browser-sidebar-strip-width) + var(--browser-sidebar-panel-width));
+    --browser-sidebar-shift: calc(var(--browser-sidebar-strip-width) + var(--browser-sidebar-panel-width));
     transition: margin-left 0.2s ease;
   }
 
   html.browser-sidebar-hidden {
     margin-left: 0 !important;
+    --browser-sidebar-shift: 0px;
   }
 
   /* Live resize: no margin transition, the page must track the cursor 1:1. */
   html.browser-sidebar-resizing,
   html.browser-sidebar-resizing.browser-sidebar-open,
   html.browser-sidebar-resizing.browser-sidebar-strip-visible {
+    transition: none;
+  }
+
+  /* position:fixed elements that the fixed-shift module marks. They follow the
+     sidebar edge via the shift variable, animating in step with the page
+     margin so nothing visually separates during open/close. Only `translate`
+     is transitioned: adding a width transition to site-managed bars breaks
+     their own measure/set loops (observed as a resize fight on github.com). */
+  [data-browser-sidebar-fixed-shift] {
+    transition: translate 0.2s ease;
+  }
+
+  html.browser-sidebar-resizing [data-browser-sidebar-fixed-shift] {
     transition: none;
   }
 }

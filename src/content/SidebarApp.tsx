@@ -11,6 +11,7 @@ import {
   setPageResizeActive,
   setPanelWidthCss
 } from './sidebarUtils';
+import { refreshFixedElementShift } from './fixedShift';
 
 const EMBED_BLOCKED_PATTERN =
   /refused to connect|content is blocked|contact the site owner|can't be embedded|cannot be displayed|x-frame-options|frame-ancestors|failed to load|err_blocked_by|err_name_not_resolved|err_connection_refused|err_address_unreachable|err_cert_|err_timed_out/i;
@@ -726,10 +727,16 @@ export function SidebarApp({
 
   useEffect(() => {
     setCssVariables(panelWidth, rootRef.current);
+    // A committed width change (drag/slider end) can newly intrude on fixed
+    // elements that were previously clear of the sidebar.
+    refreshFixedElementShift();
   }, [panelWidth]);
 
   useEffect(() => {
     applyLayoutClasses(sidebarHidden, panelOpen, settingsOpen);
+    // Fixed elements depend on the page-shift classes applied above; re-sweep
+    // after the class flip so they pick up the new shift variable.
+    refreshFixedElementShift();
   }, [panelOpen, settingsOpen, sidebarHidden]);
 
   /**
