@@ -28,6 +28,20 @@ void chrome.storage.session?.remove(['gxPanelOpen', 'gxPanelPinId']).catch(() =>
 // Registered synchronously so it survives service-worker restarts.
 browserSidebarWatchPinnedSiteCookies();
 
+// Re-assert the embed-bypass DNR session rules on EVERY worker wake, not just
+// onInstalled/onStartup. DNR session rules are cleared when the browser
+// session ends, and Chrome does not fire onStartup on crash-restore sessions —
+// leaving pinned sites un-embeddable ("refused to connect") until a pin
+// change. The sync is idempotent (removeRuleIds + addRules), so re-running it
+// on wake just re-writes the same two rules. Any event-driven wake (message,
+// toolbar click, storage change, cookie change) re-triggers this and
+// guarantees the rules exist before the panel needs them.
+void browserSidebarGetStorageData()
+  .then((data) => browserSidebarSyncEmbedBypassRules(data.pins))
+  .catch((error) => {
+    console.warn('[browser-sidebar] Wake-time embed bypass rule re-sync failed:', error);
+  });
+
 // Mirror session panel-state changes to every tab so the panel stays open
 // (or closed) consistently across all tabs of the browser session.
 chrome.storage.onChanged.addListener((changes, area) => {

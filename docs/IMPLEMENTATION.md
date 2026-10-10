@@ -259,7 +259,7 @@ Rule 2 rewrites `sub_frame` request headers for pinned domains so the navigation
 
 Together these match a typed address-bar navigation exactly, so the request carries no sign of being embedded. DNR can set or remove `Sec-Fetch-*` headers but cannot append to them; the "document / navigate / none / ?1 + no Referer" set is the proven production pattern.
 
-Rule 2 is committed in a **separate `updateSessionRules` call** from rule 1 on purpose: if Chrome ever rejects the Sec-Fetch rewrite, the header-strip rule still applies. Both rules are synced by `browserSidebarSyncEmbedBypassRules` at `onInstalled`, `onStartup`, `broadcastPinsUpdated` (pin/settings changes), and `resetStorage`.
+Rule 2 is committed in a **separate `updateSessionRules` call** from rule 1 on purpose: if Chrome ever rejects the Sec-Fetch rewrite, the header-strip rule still applies. Both rules are synced by `browserSidebarSyncEmbedBypassRules` at `onInstalled`, `onStartup`, `broadcastPinsUpdated` (pin/settings changes), `resetStorage`, **and on every service-worker wake** (top-level `background.ts` re-assert). The wake-time re-assert exists because DNR session rules are cleared when the browser session ends and Chrome does not fire `onStartup` on crash-restore sessions — without it, pinned sites could hit "refused to connect" after a browser restore until the user touched a pin. The sync is idempotent (`removeRuleIds` + `addRules`), so re-running it per wake is safe.
 
 ### Layer 3 — Cookie/session reuse (`lib/cookie-auth.ts`)
 
