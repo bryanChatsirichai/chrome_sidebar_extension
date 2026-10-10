@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
 "name": "browser-sidebar",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Sidebar for Chrome — pin web apps and open them beside your page.",
   "permissions": [
     "storage",
