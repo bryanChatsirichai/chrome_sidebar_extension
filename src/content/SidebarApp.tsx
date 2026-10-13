@@ -38,6 +38,22 @@ const IFRAME_WATCHDOG_INTERVAL_MS = 500;
  */
 const IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH = 250;
 
+/** Persists panel state; see persistPanelSession for the storage story. */
+export interface WarmFrameEntry {
+  pinId: string;
+  src: string;
+  /** Bumped on every fresh navigation so React remounts the iframe. */
+  nav: number;
+  status: 'loading' | 'ready';
+}
+
+/**
+ * How many panel iframes stay mounted (hidden) for instant pin switching.
+ * Each warm cross-origin frame is a live renderer process, so this is
+ * capped deliberately.
+ */
+const WARM_FRAME_LIMIT = 4;
+
 export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
 
 interface SidebarAppProps {
@@ -77,8 +93,7 @@ export function SidebarApp({
   const [sidebarHidden, setSidebarHidden] = useState(initialSidebarHidden);
   const [panelWidth, setPanelWidth] = useState(initialPanelWidth);
   const [panelView, setPanelView] = useState<PanelView>('idle');
-  const [frameEpoch, setFrameEpoch] = useState(0);
-  const [frameSrc, setFrameSrc] = useState('');
+  const [warmFrames, setWarmFrames] = useState<WarmFrameEntry[]>([]);
   const [fallbackPin, setFallbackPin] = useState<Pin | null>(null);
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
@@ -89,6 +104,12 @@ export function SidebarApp({
   const activePinIdRef = useRef(activePinId);
   const pinsRef = useRef(pins);
   const handlePinClickRef = useRef<(pin: Pin) => void>(() => {});
+  /** Live iframe elements by pinId — warm frames stay mounted while hidden. */
+  const frameElementsRef = useRef<Map<string, HTMLIFrameElement>>(new Map());
+  /** Mirrors the warmFrames state for synchronous reads inside callbacks. */
+  const warmFramesRef = useRef<WarmFrameEntry[]>([]);
+  /** Monotonic per-pin navigation counter — guarantees iframe remounts. */
+  const navCounterRef = useRef<Map<string, number>>(new Map());
 
   panelOpenRef.current = panelOpen;
   activePinIdRef.current = activePinId;
@@ -108,6 +129,55 @@ export function SidebarApp({
         .catch(() => {});
     } catch {
       // Session storage is unavailable until the background grants access.
+    }
+  }, []);
+
+  /** Commits the next warm-frame list (ref + state stay in lockstep). */
+  const updateWarmFrames = useCallback((next: WarmFrameEntry[]) => {
+    warmFramesRef.current = next;
+    setWarmFrames(next);
+  }, []);
+
+  /** Moves a pin's frame to the front of the warm list (LRU), adding it if new. */
+  const touchWarmFrame = useCallback(
+    (entry: WarmFrameEntry) => {
+      updateWarmFrames([entry, ...warmFramesRef.current.filter((f) => f.pinId !== entry.pinId)].slice(0, WARM_FRAME_LIMIT));
+    },
+    [updateWarmFrames]
+  );
+
+  /** Marks a frame as successfully loaded (also used for background loads). */
+  const markFrameReady = useCallback(
+    (pinId: string) => {
+      if (!warmFramesRef.current.some((f) => f.pinId === pinId && f.status !== 'ready')) {
+        return;
+      }
+      updateWarmFrames(warmFramesRef.current.map((f) => (f.pinId === pinId ? { ...f, status: 'ready' as const } : f)));
+    },
+    [updateWarmFrames]
+  );
+
+  /** Drops a frame entirely — the iframe unmounts and frees its renderer. */
+  const evictWarmFrame = useCallback(
+    (pinId: string) => {
+      if (!warmFramesRef.current.some((f) => f.pinId === pinId)) {
+        return;
+      }
+      updateWarmFrames(warmFramesRef.current.filter((f) => f.pinId !== pinId));
+      frameElementsRef.current.delete(pinId);
+    },
+    [updateWarmFrames]
+  );
+
+  /** Callback-ref registrar for the per-pin panel iframes. */
+  const registerFrameElement = useCallback((pinId: string, element: HTMLIFrameElement | null) => {
+    if (element) {
+      frameElementsRef.current.set(pinId, element);
+    } else {
+      frameElementsRef.current.delete(pinId);
+    }
+    if (pinId === activePinIdRef.current) {
+      iframeRef.current = element;
     }
   }, []);
 
@@ -143,6 +213,44 @@ export function SidebarApp({
     } catch {
       return null;
     }
+  }, []);
+
+  /**
+   * DEBUG: snapshot of everything observable about the panel iframe at the
+   * moment of a failure. Cross-origin access throws — those exceptions are
+   * captured too, since a SecurityError on location/document access is
+   * itself diagnostic (the frame committed a real cross-origin document vs.
+   * stayed on an error page).
+   */
+  const collectIframeDiagnostics = useCallback((): Record<string, unknown> => {
+    const frame = iframeRef.current;
+    if (!frame) {
+      return { framePresent: false };
+    }
+
+    const diagnostics: Record<string, unknown> = {
+      framePresent: true,
+      frameSrc: frame.src || '(empty)'
+    };
+
+    try {
+      diagnostics.href = frame.contentWindow?.location?.href ?? '(no location)';
+    } catch (error) {
+      diagnostics.href = '(SecurityError — cross-origin document committed)';
+      diagnostics.hrefError = String(error);
+    }
+
+    try {
+      const doc = frame.contentDocument;
+      diagnostics.readyState = doc?.readyState ?? '(no document)';
+      const text = (doc?.body?.innerText ?? '').trim();
+      diagnostics.bodyTextLength = text.length;
+      diagnostics.bodyTextSnippet = text.slice(0, 200);
+    } catch (error) {
+      diagnostics.documentError = String(error);
+    }
+
+    return diagnostics;
   }, []);
 
   /**
@@ -197,7 +305,6 @@ export function SidebarApp({
     (pin: Pin) => {
       clearIframeTimer();
       clearIframeWatchdog();
-      setFrameSrc('');
       setFallbackPin(pin);
       setPanelView('fallback');
     },
@@ -209,19 +316,30 @@ export function SidebarApp({
    * "Open in new tab" action; it never opens another window automatically.
    */
   const handleEmbedFailure = useCallback(
-    (pin: Pin) => {
+    (pin: Pin, reason: string) => {
       if (embedFailureHandledRef.current) {
         return;
       }
 
+      // DEBUG: full trace of why the embed was declared failed.
+      console.error('[browser-sidebar] Embed failure:', {
+        pin,
+        reason,
+        activePinId: activePinIdRef.current,
+        diagnostics: collectIframeDiagnostics()
+      });
+
       embedFailureHandledRef.current = true;
       iframeVerifyGenerationRef.current += 1;
+      // The frame is dead (error page / blocked) — drop it so the next open
+      // starts a fresh navigation instead of reusing the corpse.
+      evictWarmFrame(pin.id);
       clearIframeTimer();
       clearIframeVerifyTimer();
       clearIframeWatchdog();
       showFallbackUI(pin);
     },
-    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, showFallbackUI]
+    [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, collectIframeDiagnostics, evictWarmFrame, showFallbackUI]
   );
 
   /**
@@ -252,7 +370,7 @@ export function SidebarApp({
         }
 
         if (isIframeEmbedBlocked()) {
-          void handleEmbedFailure(pin);
+          void handleEmbedFailure(pin, 'watchdog: blocked after initial success');
           return;
         }
 
@@ -278,29 +396,50 @@ export function SidebarApp({
         return;
       }
 
+      console.log('[browser-sidebar] Embed verified, showing panel:', {
+        pin: pin.name,
+        href: getIframeLocationHref()
+      });
+      markFrameReady(pin.id);
       showIframeLoaded();
       startIframeWatchdog(pin, generation);
     },
-    [showIframeLoaded, startIframeWatchdog]
+    [getIframeLocationHref, markFrameReady, showIframeLoaded, startIframeWatchdog]
   );
 
   const verifyIframeEmbed = useCallback(
     (pin: Pin, attempt = 0, generation = iframeVerifyGenerationRef.current) => {
       if (generation !== iframeVerifyGenerationRef.current) {
+        console.log('[browser-sidebar] Verify skipped: stale generation', { generation });
         return;
       }
 
       const activePin = pins.find((p) => p.id === activePinId);
       if (!panelOpen || activePin?.id !== pin.id || embedFailureHandledRef.current) {
+        console.log('[browser-sidebar] Verify skipped: state changed', {
+          panelOpen,
+          activePinId: activePin?.id,
+          pinId: pin.id,
+          failureHandled: embedFailureHandledRef.current
+        });
         return;
       }
 
       if (isIframeEmbedBlocked()) {
-        handleEmbedFailure(pin);
+        console.log('[browser-sidebar] Verify: embed blocked detected (attempt ' + attempt + ')');
+        handleEmbedFailure(pin, 'verify: blocked on load');
         return;
       }
 
       const href = getIframeLocationHref();
+
+      console.log('[browser-sidebar] Verify attempt', {
+        attempt,
+        generation,
+        href,
+        pin: pin.name,
+        diagnostics: collectIframeDiagnostics()
+      });
 
       if (href === 'about:blank' || href === '') {
         // A load event fired while the frame is still on about:blank: either
@@ -330,7 +469,7 @@ export function SidebarApp({
       }
 
       if (isIframeEmbedBlocked()) {
-        handleEmbedFailure(pin);
+        handleEmbedFailure(pin, 'verify: blocked after retry');
         return;
       }
 
@@ -338,6 +477,7 @@ export function SidebarApp({
     },
     [
       activePinId,
+      collectIframeDiagnostics,
       finalizeIframeSuccess,
       getIframeLocationHref,
       handleEmbedFailure,
@@ -367,36 +507,88 @@ export function SidebarApp({
    */
   const ensureEmbedRulesReady = useCallback(async () => {
     try {
-      await chrome.runtime.sendMessage({ action: 'ensureEmbedRules' });
-    } catch {
+      const response = await chrome.runtime.sendMessage({ action: 'ensureEmbedRules' });
+      // DEBUG: the background's answer gates the iframe navigation — its
+      // error payload is the first place a DNR/cookie failure shows up.
+      if (!response?.ok) {
+        console.error('[browser-sidebar] ensureEmbedRules error response:', response);
+      } else {
+        console.log('[browser-sidebar] ensureEmbedRules ok:', response);
+      }
+    } catch (error) {
       // Worker unreachable or extension context invalidated — proceed.
+      console.warn('[browser-sidebar] ensureEmbedRules send failed:', error);
     }
   }, []);
 
   /**
-   * Opens the panel for a pin by remounting a pristine iframe. Reusing one
-   * frame across cross-origin pins (even via an about:blank reset) made pin
-   * switching flaky; a fresh frame per navigation is deterministic and skips
-   * the reset round-trip entirely.
+   * Opens the panel for a pin. Warm frames (mounted, hidden, already
+   * verified) reopen instantly with no network or rule-gate round-trip.
+   * Cold opens remount a pristine iframe per navigation — one dedicated
+   * frame per pin avoids the cross-origin reuse flakiness that came from
+   * reusing a single frame element across pins.
    */
   const openPanelForPin = useCallback(
     async (pin: Pin) => {
+      console.log('[browser-sidebar] Opening panel for pin:', {
+        pin,
+        activePinId: activePinIdRef.current,
+        panelOpen: panelOpenRef.current
+      });
+
       persistPanelSession(true, pin.id);
       embedFailureHandledRef.current = false;
       iframeVerifyGenerationRef.current += 1;
       setFallbackPin(null);
-      setPanelView('loading');
 
+      // Point diagnostics/verification at this pin's frame from now on
+      // (the effect below re-points on later active-pin changes).
+      iframeRef.current = frameElementsRef.current.get(pin.id) ?? null;
+
+      const existing = warmFramesRef.current.find((f) => f.pinId === pin.id);
+
+      if (existing && existing.src === pin.url && existing.status === 'ready') {
+        console.log('[browser-sidebar] Reusing warm frame:', pin.name);
+        touchWarmFrame(existing);
+        setPanelView('iframe');
+        return;
+      }
+
+      setPanelView('loading');
       clearIframeTimer();
       clearIframeVerifyTimer();
       clearIframeWatchdog();
+
+      if (existing && existing.src === pin.url) {
+        // A frame for this pin is already loading in the background: show
+        // the spinner, re-arm verification, and re-arm the timeout net.
+        touchWarmFrame(existing);
+        startIframeVerification(pin);
+        iframeLoadTimerRef.current = setTimeout(() => {
+          if (
+            !embedFailureHandledRef.current &&
+            panelOpenRef.current &&
+            pin.id === activePinIdRef.current
+          ) {
+            handleEmbedFailure(pin, `load timeout after ${BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS}ms`);
+          }
+        }, BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
+        return;
+      }
 
       // Gate the navigation on the DNR rules being active — never let the
       // sub_frame request beat rule installation out of a cold worker.
       await ensureEmbedRulesReady();
 
-      setFrameSrc(pin.url);
-      setFrameEpoch((epoch) => epoch + 1);
+      console.log('[browser-sidebar] Navigating iframe to:', pin.url);
+      const nextNav = (navCounterRef.current.get(pin.id) ?? 0) + 1;
+      navCounterRef.current.set(pin.id, nextNav);
+      touchWarmFrame({
+        pinId: pin.id,
+        src: pin.url,
+        nav: nextNav,
+        status: 'loading'
+      });
 
       iframeLoadTimerRef.current = setTimeout(() => {
         if (
@@ -404,7 +596,7 @@ export function SidebarApp({
           panelOpenRef.current &&
           pin.id === activePinIdRef.current
         ) {
-          handleEmbedFailure(pin);
+          handleEmbedFailure(pin, `load timeout after ${BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS}ms`);
         }
       }, BROWSER_SIDEBAR_DEFAULTS.IFRAME_LOAD_TIMEOUT_MS);
     },
@@ -414,10 +606,16 @@ export function SidebarApp({
       clearIframeWatchdog,
       ensureEmbedRulesReady,
       handleEmbedFailure,
-      persistPanelSession
+      persistPanelSession,
+      startIframeVerification,
+      touchWarmFrame
     ]
   );
 
+  /**
+   * Closes the panel but keeps warm frames mounted (hidden): reopening the
+   * same pin is instant instead of a full reload.
+   */
   const closePanel = useCallback(() => {
     persistPanelSession(false, null);
     setPanelOpen(false);
@@ -427,21 +625,31 @@ export function SidebarApp({
     clearIframeTimer();
     clearIframeVerifyTimer();
     clearIframeWatchdog();
-    setFrameSrc('');
   }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, persistPanelSession]);
 
   const handlePinClick = useCallback(
     (pin: Pin) => {
+      // DEBUG: entry point trace — which pin was clicked and the full state
+      // the click landed on.
+      console.log('[browser-sidebar] Pin clicked:', {
+        pin,
+        activePinId,
+        panelOpen,
+        settingsOpen
+      });
+
       if (settingsOpen) {
         setSettingsOpen(false);
       }
 
       if (activePinId === pin.id && panelOpen) {
+        console.log('[browser-sidebar] Pin click → closing panel (same pin, already open)');
         closePanel();
         return;
       }
 
       if (activePinId === pin.id && !panelOpen) {
+        console.log('[browser-sidebar] Pin click → deselecting pin (same pin, panel closed)');
         setActivePinId(null);
         activePinIdRef.current = null;
         return;
@@ -463,20 +671,46 @@ export function SidebarApp({
 
   handlePinClickRef.current = handlePinClick;
 
-  const handleIframeLoad = useCallback(() => {
-    const pin = getActivePin();
-    if (!pin || !panelOpen || embedFailureHandledRef.current) {
-      return;
-    }
-    startIframeVerification(pin);
-  }, [getActivePin, panelOpen, startIframeVerification]);
+  const handleIframeLoad = useCallback(
+    (pinId: string) => {
+      const pin = pinsRef.current.find((p) => p.id === pinId) ?? null;
+      console.log('[browser-sidebar] iframe onLoad fired:', {
+        pin: pin?.name ?? '(unknown)',
+        pinId,
+        isActive: pinId === activePinIdRef.current,
+        href: getIframeLocationHref()
+      });
+      if (!pin) {
+        return;
+      }
+      if (pinId !== activePinIdRef.current || !panelOpenRef.current || embedFailureHandledRef.current) {
+        // A background frame finished loading while inactive: mark it ready
+        // so its next open is a warm, instant one.
+        markFrameReady(pinId);
+        return;
+      }
+      startIframeVerification(pin);
+    },
+    [getIframeLocationHref, markFrameReady, startIframeVerification]
+  );
 
-  const handleIframeError = useCallback(() => {
-    const pin = getActivePin();
-    if (pin && panelOpen && !embedFailureHandledRef.current) {
-      handleEmbedFailure(pin);
-    }
-  }, [getActivePin, handleEmbedFailure, panelOpen]);
+  const handleIframeError = useCallback(
+    (pinId: string) => {
+      const pin = pinsRef.current.find((p) => p.id === pinId) ?? null;
+      console.error('[browser-sidebar] iframe onError fired:', {
+        pin: pin?.name ?? '(unknown)',
+        pinId,
+        frameSrc: iframeRef.current?.src ?? '(none)',
+        diagnostics: collectIframeDiagnostics()
+      });
+      if (pin && pinId === activePinIdRef.current && panelOpenRef.current && !embedFailureHandledRef.current) {
+        handleEmbedFailure(pin, 'iframe error event');
+      } else if (pin) {
+        evictWarmFrame(pinId);
+      }
+    },
+    [collectIframeDiagnostics, evictWarmFrame, handleEmbedFailure]
+  );
 
   const toggleSettings = useCallback(() => {
     if (settingsOpen) {
@@ -843,7 +1077,13 @@ export function SidebarApp({
   }, []);
 
   useEffect(() => {
-    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean; level?: string; messageText?: string; payload?: unknown }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+      if (message.action === 'netLog') {
+        // DEBUG: mirror of background webRequest observations — see background.ts.
+        const fn = message.level === 'error' ? console.error : console.log;
+        fn('[browser-sidebar:net]', message.messageText, message.payload);
+      }
+
       if (message.action === 'setSidebarHidden') {
         setSidebarHidden(Boolean(message.hidden));
         sendResponse({ ok: true, hidden: Boolean(message.hidden) });
@@ -870,6 +1110,13 @@ export function SidebarApp({
           .slice()
           .sort((a: Pin, b: Pin) => a.order - b.order);
         setPins(nextPins);
+
+        // Drop warm frames whose pin was deleted or whose URL changed —
+        // the next open must be a fresh navigation.
+        const validUrls = new Map(nextPins.map((p: Pin) => [p.id, p.url]));
+        if (warmFramesRef.current.some((f) => validUrls.get(f.pinId) !== f.src)) {
+          updateWarmFrames(warmFramesRef.current.filter((f) => validUrls.get(f.pinId) === f.src));
+        }
 
         if (message.settings) {
           setSettings((prev) => {
@@ -925,7 +1172,13 @@ export function SidebarApp({
 
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, [closePanel, openPanelForPin, panelWidth, sidebarHidden]);
+  }, [closePanel, openPanelForPin, panelWidth, sidebarHidden, updateWarmFrames]);
+
+  // Keep the single iframeRef pointed at the ACTIVE pin's frame element —
+  // verification, diagnostics, and the resize lock all use it.
+  useEffect(() => {
+    iframeRef.current = frameElementsRef.current.get(activePinId ?? '') ?? null;
+  }, [activePinId, warmFrames]);
 
   const activePin = getActivePin();
 
@@ -947,12 +1200,20 @@ export function SidebarApp({
         pin={activePin}
         panelView={panelView}
         fallbackPin={fallbackPin}
-        frameEpoch={frameEpoch}
-        frameSrc={frameSrc}
-        iframeRef={iframeRef}
+        warmFrames={warmFrames}
+        activePinId={activePinId}
+        registerFrame={registerFrameElement}
         resizing={resizeDragging || sliderResizing}
         onClose={closePanel}
-        onRefresh={() => activePin && openPanelForPin(activePin)}
+        onRefresh={() => {
+          if (!activePin) {
+            return;
+          }
+          // Refresh is a forced reload: drop the warm frame so the open
+          // below remounts a fresh iframe.
+          evictWarmFrame(activePin.id);
+          void openPanelForPin(activePin);
+        }}
         onOpenInTab={() =>
           activePin && void chrome.runtime.sendMessage({ action: 'openTab', url: activePin.url }).catch(() => {})
         }

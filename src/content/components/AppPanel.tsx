@@ -1,24 +1,23 @@
 import type { RefObject } from 'react';
 import type { Pin } from '../../lib/types';
 import { resolveIconUrl } from '../../lib/pin-utils';
-import type { PanelView } from '../SidebarApp';
+import type { PanelView, WarmFrameEntry } from '../SidebarApp';
 
 interface AppPanelProps {
   open: boolean;
   pin: Pin | null;
   panelView: PanelView;
   fallbackPin: Pin | null;
-  /** Changing this remounts the iframe: fresh, pristine frame per navigation. */
-  frameEpoch: number;
-  /** Target URL for the current frame; '' parks the frame on about:blank. */
-  frameSrc: string;
-  iframeRef: RefObject<HTMLIFrameElement | null>;
+  /** Mounted panel frames (active + warm), most-recently-used first. */
+  warmFrames: WarmFrameEntry[];
+  activePinId: string | null;
+  registerFrame: (pinId: string, element: HTMLIFrameElement | null) => void;
   resizing: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onOpenInTab: () => void;
-  onIframeLoad: () => void;
-  onIframeError: () => void;
+  onIframeLoad: (pinId: string) => void;
+  onIframeError: (pinId: string) => void;
   onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
@@ -27,9 +26,9 @@ export function AppPanel({
   pin,
   panelView,
   fallbackPin,
-  frameEpoch,
-  frameSrc,
-  iframeRef,
+  warmFrames,
+  activePinId,
+  registerFrame,
   resizing,
   onClose,
   onRefresh,
@@ -65,16 +64,24 @@ export function AppPanel({
           Loading...
         </div>
 
-        <iframe
-          key={frameEpoch}
-          ref={iframeRef}
-          src={frameSrc}
-          className={`panel-iframe${panelView === 'iframe' ? '' : ' hidden'}`}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
-          title={pin?.name ?? 'Pinned website'}
-          onLoad={onIframeLoad}
-          onError={onIframeError}
-        />
+        {/*
+          One dedicated iframe per pin that has been opened this session.
+          Warm (inactive) frames stay mounted with display:none — their
+          documents stay alive, so switching pins is instant. The key
+          includes the nav counter so a forced refresh remounts the frame.
+        */}
+        {warmFrames.map((entry) => (
+          <iframe
+            key={`${entry.pinId}:${entry.src}:${entry.nav}`}
+            ref={(element) => registerFrame(entry.pinId, element)}
+            src={entry.src}
+            className={`panel-iframe${entry.pinId === activePinId && panelView === 'iframe' ? '' : ' hidden'}`}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
+            title={pin && entry.pinId === pin.id ? pin.name : 'Pinned website'}
+            onLoad={() => onIframeLoad(entry.pinId)}
+            onError={() => onIframeError(entry.pinId)}
+          />
+        ))}
 
         <div className={`fallback-view${panelView === 'fallback' ? ' visible' : ''}`}>
           <div className="fallback-icon">

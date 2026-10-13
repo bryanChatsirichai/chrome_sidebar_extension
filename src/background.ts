@@ -2,7 +2,7 @@
  * Service worker: extension lifecycle, toolbar toggle, and message routing
  * between popup, content scripts, and the sidebar panel.
  */
-import { browserSidebarSyncEmbedBypassRules } from './lib/embed-bypass';
+import { browserSidebarGetPinHostnames, browserSidebarSyncEmbedBypassRules } from './lib/embed-bypass';
 import { browserSidebarRelaxPinnedSiteCookies, browserSidebarWatchPinnedSiteCookies } from './lib/cookie-auth';
 import {
   browserSidebarGetStorageData,
@@ -28,6 +28,26 @@ void chrome.storage.session?.remove(['gxPanelOpen', 'gxPanelPinId']).catch(() =>
 // Registered synchronously so it survives service-worker restarts.
 browserSidebarWatchPinnedSiteCookies();
 
+// --- Embed-support sync with per-open fast path ---
+//
+// Session DNR rules live for the whole browser session and the cookie
+// watcher covers re-issued cookies, so a full re-sync per panel open was
+// pure latency (hundreds of ms of cookie getAll/set per click). The
+// signature below marks what was last synced THIS worker lifetime; when it
+// matches, ensureEmbedRules answers immediately.
+let browserSidebarEmbedSyncSignature: string | null = null;
+
+function browserSidebarComputeEmbedSyncSignature(pins: Pin[]): string {
+  return pins.map((pin) => pin.url).sort().join('|');
+}
+
+/** Full embed-support sync: rules first (they gate panel navigations), cookies second. */
+async function browserSidebarSyncEmbedSupport(pins: Pin[]): Promise<void> {
+  await browserSidebarSyncEmbedBypassRules(pins);
+  await browserSidebarRelaxPinnedSiteCookies(pins);
+  browserSidebarEmbedSyncSignature = browserSidebarComputeEmbedSyncSignature(pins);
+}
+
 // Re-assert the embed-bypass DNR session rules on EVERY worker wake, not just
 // onInstalled/onStartup. DNR session rules are cleared when the browser
 // session ends, and Chrome does not fire onStartup on crash-restore sessions —
@@ -37,16 +57,7 @@ browserSidebarWatchPinnedSiteCookies();
 // toolbar click, storage change, cookie change) re-triggers this and
 // guarantees the rules exist before the panel needs them.
 void browserSidebarGetStorageData()
-  .then((data) =>
-    (async () => {
-      // Rules first — they gate every panel navigation. Cookie relaxation
-      // second — it re-arms site sessions after crash-restores that never
-      // fired onStartup (the cookies.onChanged watcher covers re-issued
-      // cookies, but the initial flip is needed after browser restart).
-      await browserSidebarSyncEmbedBypassRules(data.pins);
-      await browserSidebarRelaxPinnedSiteCookies(data.pins);
-    })()
-  )
+  .then((data) => browserSidebarSyncEmbedSupport(data.pins))
   .catch((error) => {
     console.warn('[browser-sidebar] Wake-time embed bypass re-sync failed:', error);
   });
@@ -66,14 +77,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onInstalled.addListener(async () => {
   await browserSidebarInitializeStorage();
   const data = await browserSidebarGetStorageData();
-  await browserSidebarSyncEmbedBypassRules(data.pins);
-  await browserSidebarRelaxPinnedSiteCookies(data.pins);
+  await browserSidebarSyncEmbedSupport(data.pins);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   const data = await browserSidebarGetStorageData();
-  await browserSidebarSyncEmbedBypassRules(data.pins);
-  await browserSidebarRelaxPinnedSiteCookies(data.pins);
+  await browserSidebarSyncEmbedSupport(data.pins);
 });
 
 // --- Toolbar icon: show/hide sidebar ---
@@ -109,6 +118,120 @@ chrome.action.onClicked.addListener(async (tab) => {
   await broadcastToAllTabs({ action: 'setSidebarHidden', hidden });
 });
 
+// --- DEBUG: network-level trace for panel embeds ---
+//
+// The parent-side checks cannot distinguish "cross-origin document committed"
+// from "Chrome is showing an error page inside the frame" — both throw
+// SecurityError on location access. These observers see the actual wire
+// traffic: whether the sub_frame request fired, what headers came back
+// (X-Frame-Options / CSP frame-ancestors), and whether Chrome killed it
+// (ERR_BLOCKED_BY_CLIENT = host-page CSP frame-src; ERR_BLOCKED_BY_RESPONSE
+// = XFO/CORP on the response).
+
+function browserSidebarGetHeader(
+  headers: chrome.webRequest.HttpHeader[] | undefined,
+  name: string
+): string | undefined {
+  return headers?.find((header) => header.name.toLowerCase() === name)?.value;
+}
+
+/** DEBUG: log a network event in both the SW console and the tab it happened in. */
+function browserSidebarNetLog(
+  tabId: number | undefined,
+  level: 'log' | 'error',
+  message: string,
+  payload: unknown
+): void {
+  const fn = level === 'error' ? console.error : console.log;
+  fn('[browser-sidebar:net]', message, payload);
+  if (typeof tabId === 'number' && tabId >= 0) {
+    // Best-effort mirror into the page console — no listener = nothing to do.
+    chrome.tabs
+      .sendMessage(tabId, { action: 'netLog', level, messageText: message, payload })
+      .catch(() => {});
+  }
+}
+
+chrome.webRequest.onBeforeRequest.addListener((details) => {
+  if (details.type !== 'sub_frame') {
+    return;
+  }
+  browserSidebarNetLog(details.tabId, 'log', 'sub_frame request STARTED:', {
+    url: details.url,
+    initiator: details.initiator,
+    documentUrl: (details as { documentUrl?: string }).documentUrl,
+    frameId: details.frameId,
+    parentFrameId: details.parentFrameId
+  });
+},
+{ urls: ['<all_urls>'] });
+
+chrome.webRequest.onBeforeRedirect.addListener((details) => {
+  if (details.type !== 'sub_frame') {
+    return;
+  }
+  browserSidebarNetLog(details.tabId, 'log', 'sub_frame REDIRECT:', {
+    url: details.url,
+    redirectUrl: details.redirectUrl,
+    statusCode: details.statusCode,
+    frameId: details.frameId
+  });
+},
+{ urls: ['<all_urls>'] });
+
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  void (async () => {
+    if (details.type === 'main_frame') {
+      const csp = browserSidebarGetHeader(details.responseHeaders, 'content-security-policy') ?? '';
+      const frameSrc = /frame-src[^;]*/i.exec(csp)?.[0];
+      if (frameSrc) {
+        browserSidebarNetLog(details.tabId, 'log', 'host page CSP:', {
+          url: details.url,
+          frameSrc
+        });
+      }
+      return;
+    }
+
+    if (details.type !== 'sub_frame') {
+      return;
+    }
+
+    // Log EVERY sub_frame response unconditionally — the filter is the thing
+    // we are debugging; if x.com responses disappear, we must see it.
+    const csp = browserSidebarGetHeader(details.responseHeaders, 'content-security-policy') ?? '';
+    browserSidebarNetLog(details.tabId, 'log', 'sub_frame response:', {
+      url: details.url,
+      initiator: details.initiator,
+      frameId: details.frameId,
+      parentFrameId: details.parentFrameId,
+      statusCode: details.statusCode,
+      redirected: (details as { redirectUrl?: string }).redirectUrl !== details.url,
+      redirectUrl: (details as { redirectUrl?: string }).redirectUrl,
+      xFrameOptions: browserSidebarGetHeader(details.responseHeaders, 'x-frame-options'),
+      cspFrameAncestors: /frame-ancestors[^;]*/i.exec(csp)?.[0] ?? null,
+      crossOriginResourcePolicy: browserSidebarGetHeader(
+        details.responseHeaders,
+        'cross-origin-resource-policy'
+      )
+    });
+  })();
+},
+{ urls: ['<all_urls>'] });
+
+chrome.webRequest.onErrorOccurred.addListener((details) => {
+  if (details.type !== 'sub_frame') {
+    return;
+  }
+  browserSidebarNetLog(details.tabId, 'error', 'sub_frame FAILED:', {
+    url: details.url,
+    initiator: details.initiator,
+    frameId: details.frameId,
+    error: details.error
+  });
+},
+{ urls: ['<all_urls>'] });
+
 // --- Runtime message handlers ---
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -130,14 +253,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pins: nextPins,
       settings: message.settings as Settings
     })
-      .then(() => {
-        const tasks: Promise<unknown>[] = [];
-        if (nextPins) {
-          tasks.push(browserSidebarSyncEmbedBypassRules(nextPins));
-          tasks.push(browserSidebarRelaxPinnedSiteCookies(nextPins));
-        }
-        return Promise.all(tasks);
-      })
+      .then(() => browserSidebarSyncEmbedSupport(nextPins))
       .then(() => sendResponse({ ok: true }));
     return true;
   }
@@ -149,10 +265,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void (async () => {
       try {
         const data = await browserSidebarGetStorageData();
-        await browserSidebarSyncEmbedBypassRules(data.pins);
-        await browserSidebarRelaxPinnedSiteCookies(data.pins);
+        const signature = browserSidebarComputeEmbedSyncSignature(data.pins);
+
+        if (signature === browserSidebarEmbedSyncSignature) {
+          // Fast path: rules live for the whole browser session, the cookie
+          // watcher covers rotation — skip the redundant per-open re-sync.
+          sendResponse({ ok: true });
+          return;
+        }
+
+        console.log('[browser-sidebar] ensureEmbedRules: syncing rules for:', {
+          pins: data.pins.map((pin) => pin.url)
+        });
+        await browserSidebarSyncEmbedSupport(data.pins);
         sendResponse({ ok: true });
       } catch (error) {
+        console.error('[browser-sidebar] ensureEmbedRules failed:', error);
         sendResponse({ ok: false, error: String(error) });
       }
     })();
@@ -197,8 +325,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void browserSidebarResetStorageToDefaults()
       .then((data) =>
         broadcastToAllTabs({ action: 'pinsUpdated', pins: data.pins, settings: data.settings })
-          .then(() => browserSidebarSyncEmbedBypassRules(data.pins))
-          .then(() => browserSidebarRelaxPinnedSiteCookies(data.pins))
+          .then(() => browserSidebarSyncEmbedSupport(data.pins))
           .then(() => data)
       )
       .then((data) => sendResponse({ ok: true, data }))
