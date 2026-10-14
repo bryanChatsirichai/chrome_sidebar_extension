@@ -654,6 +654,23 @@ $browser-sidebar-text-white: #fff;
     pointer-events: none;
   }
 
+  .reload-notice {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 2147483647;
+    background: $browser-sidebar-accent;
+    color: $browser-sidebar-text-white;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 6px 10px;
+    border-radius: 0 0 8px 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    max-width: 200px;
+  }
+
   .fallback-view {
     display: none;
     flex-direction: column;

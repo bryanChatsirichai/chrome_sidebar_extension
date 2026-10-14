@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BROWSER_SIDEBAR_DEFAULTS, browserSidebarClamp } from '../lib/defaults';
 import { parsePinUrl, reindexPins, resolveIconUrl, getCurrentPagePinDefaults } from '../lib/pin-utils';
+import { browserSidebarRuntimeAlive, browserSidebarSafeSendMessage } from './runtimeGuard';
 import type { Pin, Settings } from '../lib/types';
 import { IconStrip } from './components/IconStrip';
 import { AppPanel } from './components/AppPanel';
@@ -120,6 +121,10 @@ export function SidebarApp({
   const [warmFrames, setWarmFrames] = useState<WarmFrameEntry[]>([]);
   const [fallbackPin, setFallbackPin] = useState<Pin | null>(null);
   const [repairInProgress, setRepairInProgress] = useState(false);
+  // True once this content script's extension context was invalidated
+  // (extension reloaded/updated while the tab stayed open) — the sidebar
+  // keeps rendering but its messaging is dead; the user should refresh.
+  const [runtimeDead, setRuntimeDead] = useState(false);
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
   const [resizeDragging, setResizeDragging] = useState(false);
@@ -365,12 +370,19 @@ export function SidebarApp({
   const saveAndBroadcast = useCallback(
     async (nextPins: Pin[], nextSettings: Settings, width: number) => {
       const merged = { ...nextSettings, panelWidth: width };
-      await chrome.storage.sync.set({ pins: nextPins, settings: merged });
-      await chrome.runtime.sendMessage({
-        action: 'broadcastPinsUpdated',
-        pins: nextPins,
-        settings: merged
-      });
+      // chrome.storage / chrome.runtime calls throw once the extension
+      // context is invalidated (extension reloaded with the tab still open).
+      // Failing soft keeps the React tree alive; the reload notice covers UX.
+      try {
+        await chrome.storage.sync.set({ pins: nextPins, settings: merged });
+        await browserSidebarSafeSendMessage({
+          action: 'broadcastPinsUpdated',
+          pins: nextPins,
+          settings: merged
+        });
+      } catch (error) {
+        console.warn('[browser-sidebar] saveAndBroadcast skipped:', error);
+      }
     },
     []
   );
@@ -635,7 +647,7 @@ export function SidebarApp({
    */
   const ensureEmbedRulesReady = useCallback(async () => {
     try {
-      const response = await chrome.runtime.sendMessage({ action: 'ensureEmbedRules' });
+      const response = await browserSidebarSafeSendMessage<{ ok?: boolean }>({ action: 'ensureEmbedRules' });
       // DEBUG: the background's answer gates the iframe navigation — its
       // error payload is the first place a DNR/cookie failure shows up.
       if (!response?.ok) {
@@ -798,7 +810,7 @@ export function SidebarApp({
 
       setActivePinId(pin.id);
       activePinIdRef.current = pin.id;
-      void chrome.runtime.sendMessage({ action: 'saveLastActivePin', pinId: pin.id });
+      void browserSidebarSafeSendMessage({ action: 'saveLastActivePin', pinId: pin.id });
 
       // Always try the in-page panel first — the background worker strips
       // iframe-blocking response headers for pinned domains (embed-bypass.ts).
@@ -864,7 +876,7 @@ export function SidebarApp({
     async (pin: Pin): Promise<boolean> => {
       setRepairInProgress(true);
       try {
-        const response = await chrome.runtime.sendMessage({ action: 'repairEmbedPartition' });
+        const response = await browserSidebarSafeSendMessage<{ ok?: boolean }>({ action: 'repairEmbedPartition' });
         if (!response?.ok) {
           console.error('[browser-sidebar] Repair failed:', response);
           return false;
@@ -1085,8 +1097,16 @@ export function SidebarApp({
     if (!window.confirm('Reset all pins and settings to defaults?')) {
       return;
     }
-    const response = await chrome.runtime.sendMessage({ action: 'resetStorage' });
-    if (!response?.ok) {
+    const response = await browserSidebarSafeSendMessage<{
+      ok?: boolean;
+      data?: {
+        pins: Pin[];
+        settings: Settings;
+        lastActivePinId?: string | null;
+        sidebarHidden?: boolean;
+      };
+    }>({ action: 'resetStorage' });
+    if (!response?.ok || !response.data) {
       return;
     }
     setPins(response.data.pins);
@@ -1261,7 +1281,7 @@ export function SidebarApp({
     }
     setActivePinId(pin.id);
     activePinIdRef.current = pin.id;
-    void chrome.runtime.sendMessage({ action: 'saveLastActivePin', pinId: pin.id }).catch(() => {});
+    void browserSidebarSafeSendMessage({ action: 'saveLastActivePin', pinId: pin.id });
     setPanelOpen(true);
     panelOpenRef.current = true;
     openPanelForPin(pin);
@@ -1436,6 +1456,18 @@ export function SidebarApp({
     iframeRef.current = frameElementsRef.current.get(activePinId ?? '') ?? null;
   }, [activePinId, warmFrames]);
 
+  // Watch for extension-context invalidation (extension reloaded/updated
+  // while this tab stayed open). Guarded calls already no-op, but the user
+  // needs to know the sidebar's messaging is dead until a page refresh.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!browserSidebarRuntimeAlive()) {
+        setRuntimeDead(true);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const activePin = getActivePin();
 
   return (
@@ -1443,6 +1475,12 @@ export function SidebarApp({
       ref={rootRef}
       className={`sidebar-root${sidebarHidden ? ' hidden' : ''}${resizeDragging || sliderResizing ? ' resizing' : ''}`}
     >
+      {runtimeDead && (
+        <div className="reload-notice" role="status">
+          Extension reloaded — refresh this page
+        </div>
+      )}
+
       <IconStrip
         pins={pins}
         activePinId={activePinId}
@@ -1471,7 +1509,7 @@ export function SidebarApp({
           void openPanelForPin(activePin);
         }}
         onOpenInTab={() =>
-          activePin && void chrome.runtime.sendMessage({ action: 'openTab', url: activePin.url }).catch(() => {})
+          activePin && void browserSidebarSafeSendMessage({ action: 'openTab', url: activePin.url })
         }
         onIframeLoad={handleIframeLoad}
         onIframeError={handleIframeError}
