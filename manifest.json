@@ -10,7 +10,8 @@
     "windows",
     "cookies",
     "declarativeNetRequestWithHostAccess",
-    "webRequest"
+    "webRequest",
+    "browsingData"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

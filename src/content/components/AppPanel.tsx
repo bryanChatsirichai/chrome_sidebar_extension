@@ -8,7 +8,7 @@ interface AppPanelProps {
   pin: Pin | null;
   panelView: PanelView;
   fallbackPin: Pin | null;
-  /** Mounted panel frames (active + warm), most-recently-used first. */
+  /** Mounted panel frames (active + warm), stable insertion order — the array is NEVER reordered: moving an iframe in the DOM reloads it. */
   warmFrames: WarmFrameEntry[];
   activePinId: string | null;
   registerFrame: (pinId: string, element: HTMLIFrameElement | null) => void;
@@ -19,6 +19,9 @@ interface AppPanelProps {
   onIframeLoad: (pinId: string) => void;
   onIframeError: (pinId: string) => void;
   onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
+  /** One-click partition repair (clears service workers) + retry. */
+  onRepairEmbed: () => void;
+  repairInProgress: boolean;
 }
 
 export function AppPanel({
@@ -35,7 +38,9 @@ export function AppPanel({
   onOpenInTab,
   onIframeLoad,
   onIframeError,
-  onResizeStart
+  onResizeStart,
+  onRepairEmbed,
+  repairInProgress
 }: AppPanelProps) {
   const displayPin = fallbackPin ?? pin;
 
@@ -93,9 +98,20 @@ export function AppPanel({
           </div>
           <h3 className="fallback-title">{displayPin?.name}</h3>
           <p className="fallback-message">This site could not load in the panel.</p>
-          <button className="open-tab-btn" type="button" onClick={onOpenInTab}>
-            Open in new tab
-          </button>
+          <div className="fallback-actions">
+            <button className="open-tab-btn" type="button" onClick={onOpenInTab}>
+              Open in new tab
+            </button>
+            <button
+              className="repair-btn"
+              type="button"
+              onClick={onRepairEmbed}
+              disabled={repairInProgress}
+              title="Clears all sites' service workers and retries — fixes sites whose cached embed state blocks the panel"
+            >
+              {repairInProgress ? 'Repairing…' : 'Repair & retry'}
+            </button>
+          </div>
         </div>
 
         <div

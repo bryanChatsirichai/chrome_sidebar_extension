@@ -19,6 +19,15 @@ const EMBED_BLOCKED_PATTERN =
 const IFRAME_VERIFY_MAX_ATTEMPTS = 1;
 const IFRAME_VERIFY_RETRY_MS = 100;
 /**
+ * How long verification waits for the frame's boot signal (frameDiagnostics
+ * 'panelFrameBooted' via the background) before declaring a cross-origin
+ * commit blocked. The signal fires at the frame's document_start — normally
+ * before the parent even sees onLoad — so anything that hasn't arrived by
+ * the end of this window is a frame that never ran scripts: an XFO or
+ * partitioned-SW error page.
+ */
+const IFRAME_BOOT_GRACE_MS = 2000;
+/**
  * Poll interval for frames whose load event fired while still on about:blank.
  * The navigation is either mid-commit (heavy sites such as chatgpt.com can
  * take seconds to commit) or permanently blocked. The poll never fails on its
@@ -45,6 +54,13 @@ export interface WarmFrameEntry {
   /** Bumped on every fresh navigation so React remounts the iframe. */
   nav: number;
   status: 'loading' | 'ready';
+  /**
+   * Timestamp of the last open/switch — drives LRU eviction. Deliberately
+   * NOT array order: moving an iframe node in the DOM destroys its browsing
+   * context and forces a full reload, so warmFrames keeps stable insertion
+   * order and React never reorders the mounted iframes.
+   */
+  lastUsed: number;
 }
 
 /**
@@ -53,6 +69,14 @@ export interface WarmFrameEntry {
  * capped deliberately.
  */
 const WARM_FRAME_LIMIT = 4;
+
+/**
+ * Minimum spacing between automatic partition repairs. The repair wipes ALL
+ * sites' service workers (the only code path that removes third-party
+ * storage-partitioned SWs), so it must never loop: one auto attempt per
+ * panel-open, and no second auto attempt within this window.
+ */
+const AUTO_REPAIR_COOLDOWN_MS = 30_000;
 
 export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
 
@@ -95,6 +119,7 @@ export function SidebarApp({
   const [panelView, setPanelView] = useState<PanelView>('idle');
   const [warmFrames, setWarmFrames] = useState<WarmFrameEntry[]>([]);
   const [fallbackPin, setFallbackPin] = useState<Pin | null>(null);
+  const [repairInProgress, setRepairInProgress] = useState(false);
   const [editingPinId, setEditingPinId] = useState<string | null>(null);
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
   const [resizeDragging, setResizeDragging] = useState(false);
@@ -104,6 +129,27 @@ export function SidebarApp({
   const activePinIdRef = useRef(activePinId);
   const pinsRef = useRef(pins);
   const handlePinClickRef = useRef<(pin: Pin) => void>(() => {});
+  // Ref indirection so the runtime-message listener can trigger embed
+  // failure without re-registering on every callback identity change.
+  const handleEmbedFailureRef = useRef<(pin: Pin, reason: string) => void>(() => {});
+  // Same for the auto-repair loop: handleEmbedFailure is declared BEFORE
+  // openPanelForPin, but the repair needs openPanelForPin — a plain
+  // useCallback dependency would be a TDZ / circular-dependency trap.
+  const repairAndRetryRef = useRef<(pin: Pin) => Promise<boolean>>(async () => false);
+  // One automatic repair per panel-open attempt (reset in openPanelForPin).
+  const autoRepairAttemptedRef = useRef(false);
+  // Global cooldown so repeated failures can never trigger a SW-wipe storm.
+  const lastAutoRepairAtRef = useRef(0);
+  // Survives panel close (unlike activePinId): the toolbar toggle reopens
+  // the last-opened pin instead of falling back to the first pin.
+  const lastOpenedPinIdRef = useRef<string | null>(null);
+  // Origins whose panel frame has PROVEN it runs scripts (frameDiagnostics
+  // boot signal). The only reliable committed-vs-blocked discriminator for
+  // cross-origin frames — cleared for a pin's origin right before a fresh
+  // navigation so a blocked retry can't inherit a stale success signal.
+  const bootedOriginsRef = useRef<Set<string>>(new Set());
+  // When the current verification cycle started (boot-grace window anchor).
+  const verifyStartedAtRef = useRef(0);
   /** Live iframe elements by pinId — warm frames stay mounted while hidden. */
   const frameElementsRef = useRef<Map<string, HTMLIFrameElement>>(new Map());
   /** Mirrors the warmFrames state for synchronous reads inside callbacks. */
@@ -138,10 +184,44 @@ export function SidebarApp({
     setWarmFrames(next);
   }, []);
 
-  /** Moves a pin's frame to the front of the warm list (LRU), adding it if new. */
+  /**
+   * Touches a pin's frame (adds if new, refreshes its fields + recency if
+   * existing) WITHOUT reordering the list. DOM order stays insertion-stable:
+   * moving an iframe in the DOM reloads it, which is exactly what warm
+   * frames exist to avoid. LRU recency lives in `lastUsed`.
+   */
   const touchWarmFrame = useCallback(
-    (entry: WarmFrameEntry) => {
-      updateWarmFrames([entry, ...warmFramesRef.current.filter((f) => f.pinId !== entry.pinId)].slice(0, WARM_FRAME_LIMIT));
+    (entry: Omit<WarmFrameEntry, 'lastUsed'>) => {
+      const now = Date.now();
+      const current = warmFramesRef.current;
+      const exists = current.some((f) => f.pinId === entry.pinId);
+
+      if (exists) {
+        // In-place update: same array position, so no other frame's DOM node
+        // moves. A changed src/nav still remounts THIS pin's iframe (new
+        // React key), but that is the intended fresh navigation.
+        updateWarmFrames(current.map((f) => (f.pinId === entry.pinId ? { ...entry, lastUsed: now } : f)));
+        return;
+      }
+
+      // New frame: append at the end (never reorder the others).
+      const next = [...current, { ...entry, lastUsed: now }];
+
+      // Over the limit: evict the least-recently-used frame — never the
+      // currently active pin's.
+      if (next.length > WARM_FRAME_LIMIT) {
+        const activeId = activePinIdRef.current;
+        const lru = next
+          .filter((f) => f.pinId !== activeId)
+          .sort((a, b) => a.lastUsed - b.lastUsed)[0];
+        if (lru) {
+          updateWarmFrames(next.filter((f) => f.pinId !== lru.pinId));
+          frameElementsRef.current.delete(lru.pinId);
+          return;
+        }
+      }
+
+      updateWarmFrames(next);
     },
     [updateWarmFrames]
   );
@@ -337,6 +417,30 @@ export function SidebarApp({
       clearIframeTimer();
       clearIframeVerifyTimer();
       clearIframeWatchdog();
+
+      // Seamless recovery: automatically repair the partition (full SW +
+      // cache clear — the only verified way to evict a third-party
+      // storage-partitioned SW serving cached XFO responses) and retry
+      // once. Guarded: one auto attempt per panel-open, and a global
+      // cooldown so a persistently failing site can never loop into a
+      // service-worker wipe storm. Beyond that, the fallback view's manual
+      // Repair & retry button takes over.
+      const canAutoRepair =
+        !autoRepairAttemptedRef.current &&
+        Date.now() - lastAutoRepairAtRef.current >= AUTO_REPAIR_COOLDOWN_MS;
+
+      if (canAutoRepair) {
+        autoRepairAttemptedRef.current = true;
+        lastAutoRepairAtRef.current = Date.now();
+        console.warn('[browser-sidebar] Auto-repairing embed partition for:', pin.name);
+        void repairAndRetryRef.current(pin).then((healed) => {
+          if (!healed) {
+            showFallbackUI(pin);
+          }
+        });
+        return; // keep the loading view while repairing + retrying
+      }
+
       showFallbackUI(pin);
     },
     [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, collectIframeDiagnostics, evictWarmFrame, showFallbackUI]
@@ -457,14 +561,37 @@ export function SidebarApp({
       }
 
       if (href === null) {
-        if (attempt < IFRAME_VERIFY_MAX_ATTEMPTS) {
+        // Cross-origin view: a committed document and a blocked error page
+        // are indistinguishable from the parent (SecurityError either
+        // way). The discriminator is the frame's own boot signal — a
+        // committed document runs frameDiagnostics at document_start and
+        // reports 'panelFrameBooted'; a blocked frame never runs scripts.
+        const bootOrigin = (() => {
+          try {
+            return new URL(pin.url).origin;
+          } catch {
+            return null;
+          }
+        })();
+
+        if (bootOrigin !== null && bootedOriginsRef.current.has(bootOrigin)) {
+          finalizeIframeSuccess(pin, generation);
+          return;
+        }
+
+        if (Date.now() - verifyStartedAtRef.current < IFRAME_BOOT_GRACE_MS) {
           iframeVerifyTimerRef.current = setTimeout(
             () => verifyIframeEmbed(pin, attempt + 1, generation),
             IFRAME_VERIFY_RETRY_MS
           );
           return;
         }
-        finalizeIframeSuccess(pin, generation);
+
+        console.error(
+          '[browser-sidebar] Frame never ran scripts within boot grace — blocked at commit:',
+          { pin: pin.name, url: pin.url }
+        );
+        handleEmbedFailure(pin, 'no frame boot signal — blocked at commit');
         return;
       }
 
@@ -491,6 +618,7 @@ export function SidebarApp({
     (pin: Pin) => {
       iframeVerifyGenerationRef.current += 1;
       const generation = iframeVerifyGenerationRef.current;
+      verifyStartedAtRef.current = Date.now();
       clearIframeVerifyTimer();
       verifyIframeEmbed(pin, 0, generation);
     },
@@ -537,7 +665,11 @@ export function SidebarApp({
       });
 
       persistPanelSession(true, pin.id);
+      lastOpenedPinIdRef.current = pin.id;
       embedFailureHandledRef.current = false;
+      // Fresh open = fresh auto-repair budget (the global cooldown still
+      // applies — this only re-arms the one-attempt-per-open guard).
+      autoRepairAttemptedRef.current = false;
       iframeVerifyGenerationRef.current += 1;
       setFallbackPin(null);
 
@@ -583,6 +715,13 @@ export function SidebarApp({
       console.log('[browser-sidebar] Navigating iframe to:', pin.url);
       const nextNav = (navCounterRef.current.get(pin.id) ?? 0) + 1;
       navCounterRef.current.set(pin.id, nextNav);
+      // Fresh navigation: drop any stale boot signal for this origin so a
+      // blocked commit can't inherit the previous document's liveness proof.
+      try {
+        bootedOriginsRef.current.delete(new URL(pin.url).origin);
+      } catch {
+        // Malformed pin URL — nothing to clear.
+      }
       touchWarmFrame({
         pinId: pin.id,
         src: pin.url,
@@ -620,6 +759,11 @@ export function SidebarApp({
     persistPanelSession(false, null);
     setPanelOpen(false);
     setPanelView('idle');
+    // Clear the active pin so the strip highlight drops with the panel —
+    // a closed panel shows no selection; clicking any pin reopens it.
+    // lastOpenedPinIdRef keeps the toolbar-toggle "reopen last pin" behavior.
+    setActivePinId(null);
+    activePinIdRef.current = null;
     embedFailureHandledRef.current = false;
     iframeVerifyGenerationRef.current += 1;
     clearIframeTimer();
@@ -648,12 +792,9 @@ export function SidebarApp({
         return;
       }
 
-      if (activePinId === pin.id && !panelOpen) {
-        console.log('[browser-sidebar] Pin click → deselecting pin (same pin, panel closed)');
-        setActivePinId(null);
-        activePinIdRef.current = null;
-        return;
-      }
+      // Note: closing the panel clears activePinId (closePanel), so a
+      // click on a non-open pin always takes the open branch below —
+      // there is no "deselect closed pin" state anymore.
 
       setActivePinId(pin.id);
       activePinIdRef.current = pin.id;
@@ -670,6 +811,7 @@ export function SidebarApp({
   );
 
   handlePinClickRef.current = handlePinClick;
+  handleEmbedFailureRef.current = handleEmbedFailure;
 
   const handleIframeLoad = useCallback(
     (pinId: string) => {
@@ -711,6 +853,58 @@ export function SidebarApp({
     },
     [collectIframeDiagnostics, evictWarmFrame, handleEmbedFailure]
   );
+
+  /**
+   * Core repair: full browsingData.remove (no origins filter — the only
+   * code path verified to remove third-party storage-partitioned service
+   * workers), then retry the embed once with a fresh navigation. Returns
+   * whether the retry was launched (the retry itself can still fail).
+   */
+  const repairAndRetry = useCallback(
+    async (pin: Pin): Promise<boolean> => {
+      setRepairInProgress(true);
+      try {
+        const response = await chrome.runtime.sendMessage({ action: 'repairEmbedPartition' });
+        if (!response?.ok) {
+          console.error('[browser-sidebar] Repair failed:', response);
+          return false;
+        }
+        console.log('[browser-sidebar] Repair complete, retrying embed:', pin.name);
+        evictWarmFrame(pin.id);
+        setActivePinId(pin.id);
+        activePinIdRef.current = pin.id;
+        setPanelOpen(true);
+        panelOpenRef.current = true;
+        void openPanelForPin(pin);
+        return true;
+      } finally {
+        setRepairInProgress(false);
+      }
+    },
+    [evictWarmFrame, openPanelForPin]
+  );
+
+  repairAndRetryRef.current = repairAndRetry;
+
+  /**
+   * Manual fallback-view button. The automatic path (handleEmbedFailure)
+   * usually heals the embed before the user ever sees the fallback view;
+   * this covers repeat failures beyond the auto attempt / cooldown.
+   */
+  const handleRepairEmbed = useCallback(async () => {
+    // Note: activePin (the render-time const) is declared further down the
+    // component — read the pin lazily here instead of closing over it,
+    // or this useCallback's dependency array would hit the TDZ.
+    const pin = getActivePin() ?? fallbackPin;
+    if (!pin || repairInProgress) {
+      return;
+    }
+    console.warn('[browser-sidebar] Manual repair requested for:', {
+      pin: pin.name,
+      url: pin.url
+    });
+    await repairAndRetry(pin);
+  }, [fallbackPin, getActivePin, repairAndRetry, repairInProgress]);
 
   const toggleSettings = useCallback(() => {
     if (settingsOpen) {
@@ -1077,11 +1271,70 @@ export function SidebarApp({
   }, []);
 
   useEffect(() => {
-    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean; level?: string; messageText?: string; payload?: unknown }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean; level?: string; messageText?: string; payload?: unknown; url?: string; error?: string; frameId?: number }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
       if (message.action === 'netLog') {
         // DEBUG: mirror of background webRequest observations — see background.ts.
         const fn = message.level === 'error' ? console.error : console.log;
         fn('[browser-sidebar:net]', message.messageText, message.payload);
+      }
+
+      if (message.action === 'embedSubFrameFailed' && typeof message.url === 'string') {
+        // The background saw the sub_frame navigation fail at the network
+        // layer (e.g. net::ERR_BLOCKED_BY_RESPONSE). The in-page verification
+        // cannot detect this on its own: a blocked frame and a committed
+        // cross-origin document are indistinguishable from the parent
+        // (SecurityError on location, no contentDocument either way).
+        console.error('[browser-sidebar] Background reported sub_frame failure:', {
+          url: message.url,
+          error: message.error,
+          frameId: message.frameId,
+          activePinId: activePinIdRef.current,
+          panelOpen: panelOpenRef.current
+        });
+
+        const failedOrigin = (() => {
+          try {
+            return new URL(message.url!).origin;
+          } catch {
+            return null;
+          }
+        })();
+
+        const affectedPin = pinsRef.current.find((pin) => {
+          try {
+            return failedOrigin !== null && new URL(pin.url).origin === failedOrigin;
+          } catch {
+            return false;
+          }
+        });
+
+        if (
+          affectedPin &&
+          affectedPin.id === activePinIdRef.current &&
+          panelOpenRef.current &&
+          !embedFailureHandledRef.current
+        ) {
+          handleEmbedFailureRef.current(
+            affectedPin,
+            `background net failure: ${message.error} (${message.url})`
+          );
+        }
+      }
+
+      if (message.action === 'panelFrameBooted' && typeof message.url === 'string') {
+        // A panel frame's scripts are running — proof the frame committed a
+        // real document. Cross-origin verification gates success on this.
+        const origin = (() => {
+          try {
+            return new URL(message.url).origin;
+          } catch {
+            return null;
+          }
+        })();
+        if (origin) {
+          bootedOriginsRef.current.add(origin);
+          console.log('[browser-sidebar] Frame booted (scripts running):', origin);
+        }
       }
 
       if (message.action === 'setSidebarHidden') {
@@ -1094,8 +1347,11 @@ export function SidebarApp({
           closePanel();
         } else {
           setPins((currentPins) => {
+            // activePinId is cleared on close — fall back to the last
+            // OPENED pin so the toolbar toggle reopens what you had, not
+            // the first pin in the strip.
             const pin =
-              currentPins.find((p) => p.id === activePinIdRef.current) ?? currentPins[0];
+              currentPins.find((p) => p.id === lastOpenedPinIdRef.current) ?? currentPins[0];
             if (pin) {
               handlePinClickRef.current(pin);
             }
@@ -1220,6 +1476,8 @@ export function SidebarApp({
         onIframeLoad={handleIframeLoad}
         onIframeError={handleIframeError}
         onResizeStart={handleResizeStart}
+        onRepairEmbed={() => void handleRepairEmbed()}
+        repairInProgress={repairInProgress}
       />
 
       <SettingsPanel

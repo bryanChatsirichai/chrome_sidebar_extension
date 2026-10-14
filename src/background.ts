@@ -135,6 +135,29 @@ function browserSidebarGetHeader(
   return headers?.find((header) => header.name.toLowerCase() === name)?.value;
 }
 
+/** Does the frame that sent this message have a pinned-site origin? */
+async function browserSidebarSenderOriginIsPinned(
+  sender: chrome.runtime.MessageSender
+): Promise<boolean> {
+  try {
+    const frameUrl = sender.url ?? sender.origin;
+    if (!frameUrl) {
+      return false;
+    }
+    const frameOrigin = new URL(frameUrl).origin;
+    const stored = (await chrome.storage.sync.get('pins')) as { pins?: Pin[] };
+    return (stored.pins ?? []).some((pin) => {
+      try {
+        return new URL(pin.url).origin === frameOrigin;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** DEBUG: log a network event in both the SW console and the tab it happened in. */
 function browserSidebarNetLog(
   tabId: number | undefined,
@@ -165,6 +188,27 @@ chrome.webRequest.onBeforeRequest.addListener((details) => {
   });
 },
 { urls: ['<all_urls>'] });
+
+chrome.webRequest.onBeforeSendHeaders.addListener((details) => {
+  if (details.type !== 'sub_frame') {
+    return;
+  }
+  // DEBUG: the Sec-Fetch-* headers the request actually carries. Rule 2 of
+  // embed-bypass.ts should have rewritten them to look like a top-level
+  // navigation — x.com serves its 'Your Request Couldn't be Processed' page
+  // when Sec-Fetch-Dest: iframe survives the rewrite.
+  const get = (name: string) =>
+    details.requestHeaders?.find((header) => header.name.toLowerCase() === name)?.value ?? null;
+  browserSidebarNetLog(details.tabId, 'log', 'sub_frame request HEADERS:', {
+    url: details.url,
+    secFetchDest: get('sec-fetch-dest'),
+    secFetchMode: get('sec-fetch-mode'),
+    secFetchSite: get('sec-fetch-site'),
+    secFetchUser: get('sec-fetch-user'),
+    referer: get('referer')
+  });
+},
+{ urls: ['<all_urls>'] }, ['requestHeaders']);
 
 chrome.webRequest.onBeforeRedirect.addListener((details) => {
   if (details.type !== 'sub_frame') {
@@ -206,6 +250,11 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
       frameId: details.frameId,
       parentFrameId: details.parentFrameId,
       statusCode: details.statusCode,
+      statusLine: (details as { statusLine?: string }).statusLine,
+      // A partitioned service worker answering from its cache is the known
+      // x.com failure mode — the XFO it serves is intact and DNR never sees
+      // the response to strip it.
+      fromCache: (details as { fromCache?: boolean }).fromCache ?? false,
       redirected: (details as { redirectUrl?: string }).redirectUrl !== details.url,
       redirectUrl: (details as { redirectUrl?: string }).redirectUrl,
       xFrameOptions: browserSidebarGetHeader(details.responseHeaders, 'x-frame-options'),
@@ -229,6 +278,39 @@ chrome.webRequest.onErrorOccurred.addListener((details) => {
     frameId: details.frameId,
     error: details.error
   });
+
+  // Forward real net failures (ERR_BLOCKED_BY_RESPONSE, ERR_CONNECTION_*)
+  // to the content script. A blocked frame is indistinguishable from a
+  // committed cross-origin document to the in-page verification code
+  // (SecurityError on location, no contentDocument either way) — this is
+  // the only reliable blocked-frame signal.
+  void (async () => {
+    try {
+      if (typeof details.tabId !== 'number' || details.tabId < 0) {
+        return;
+      }
+      const hostname = new URL(details.url).hostname.replace(/^www\./, '');
+      const { pins: pinned } = (await chrome.storage.sync.get('pins')) as { pins?: Pin[] };
+      const isPinnedOrigin = (pinned ?? []).some((pin) => {
+        try {
+          return new URL(pin.url).hostname.replace(/^www\./, '') === hostname;
+        } catch {
+          return false;
+        }
+      });
+      if (!isPinnedOrigin) {
+        return;
+      }
+      await chrome.tabs.sendMessage(details.tabId, {
+        action: 'embedSubFrameFailed',
+        url: details.url,
+        error: details.error,
+        frameId: details.frameId
+      });
+    } catch {
+      // No content script in that tab — nothing to notify.
+    }
+  })();
 },
 { urls: ['<all_urls>'] });
 
@@ -255,6 +337,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then(() => browserSidebarSyncEmbedSupport(nextPins))
       .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.action === 'repairEmbedPartition') {
+    // One-click repair for partitioned-service-worker embed poisoning
+    // (x.com "refused to connect"): a pinned site's SW registered in the
+    // (host-site, site) third-party storage partition serves panel
+    // navigations from cache with X-Frame-Options intact — DNR and
+    // webRequest never see those responses, so header stripping can't
+    // reach them. VERIFIED on the real profile: only the FULL
+    // browsingData.remove (no origins filter — a different code path than
+    // the origins-scoped one, which leaves partitioned SWs in place)
+    // heals the poisoned partition. Cost: clears every site's SWs, so
+    // this must stay a user-invoked action, never automatic.
+    void (async () => {
+      try {
+        console.warn('[browser-sidebar] Repair: clearing all service workers + cache...');
+        await chrome.browsingData.remove({}, { serviceWorkers: true, cache: true });
+        console.warn('[browser-sidebar] Repair: clear complete.');
+        sendResponse({ ok: true });
+      } catch (error) {
+        console.error('[browser-sidebar] Repair failed:', error);
+        sendResponse({ ok: false, error: String(error) });
+      }
+    })();
     return true;
   }
 
@@ -292,28 +399,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // origin belongs to a pinned site — those embeds get scroll isolation
     // (overscroll-behavior: contain) so scrolling inside the panel never
     // chains to the host page.
-    void (async () => {
-      try {
-        const frameUrl = sender.url ?? sender.origin;
-        if (!frameUrl) {
-          sendResponse({ ok: false });
-          return;
-        }
-        const frameOrigin = new URL(frameUrl).origin;
-        const stored = (await chrome.storage.sync.get('pins')) as { pins?: Pin[] };
-        const isPinned = (stored.pins ?? []).some((pin) => {
-          try {
-            return new URL(pin.url).origin === frameOrigin;
-          } catch {
-            return false;
-          }
-        });
-        sendResponse({ ok: isPinned });
-      } catch {
-        sendResponse({ ok: false });
-      }
-    })();
+    void browserSidebarSenderOriginIsPinned(sender).then((isPinned) =>
+      sendResponse({ ok: isPinned })
+    );
     return true;
+  }
+
+  if (message.action === 'shouldManageServiceWorkers') {
+    // Sub-frame SW management (frameDiagnostics.ts): pinned-origin frames
+    // keep their (host-site, origin) third-party storage partition free of
+    // service workers — a partitioned SW serves panel navigations from
+    // cache with X-Frame-Options intact, which no other layer can strip.
+    void browserSidebarSenderOriginIsPinned(sender).then((isPinned) =>
+      sendResponse({ ok: isPinned })
+    );
+    return true;
+  }
+
+  if (message.action === 'panelFrameBooted' && typeof message.url === 'string') {
+    // A pinned-origin sub-frame's scripts started running — proof that the
+    // frame COMMITTED a real document (not an XFO/partition-SW error page,
+    // which never executes scripts). Forwarded to the tab so the sidebar's
+    // verification can use it: the parent-side view of a blocked frame and
+    // a committed cross-origin document is identical otherwise.
+    if (sender.tab && typeof sender.frameId === 'number' && sender.frameId > 0) {
+      const tabId = sender.tab.id;
+      if (typeof tabId === 'number') {
+        void Promise.resolve(
+          chrome.tabs.sendMessage(tabId, {
+            action: 'panelFrameBooted',
+            url: message.url,
+            frameId: sender.frameId
+          })
+        ).catch(() => {});
+      }
+    }
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message.action === 'getStorageData') {

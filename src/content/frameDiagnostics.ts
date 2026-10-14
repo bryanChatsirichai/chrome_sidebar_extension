@@ -75,4 +75,48 @@
     // frame that is still empty 4s in is booted-dead, not slow.
     setTimeout(() => reportDom('load+4s'), 4000);
   });
+
+  // Partitioned service-worker management (the x.com "refused to connect"
+  // fix): a successfully loaded pinned frame CAN unregister the service
+  // workers registered in its (host-site, origin) third-party storage
+  // partition — those SWs answer later panel navigations from cache with
+  // X-Frame-Options intact, which DNR header stripping can never reach. A
+  // ~3s interval plus a pagehide sweep keeps the partition clean while the
+  // panel is in use, so in-panel navigations (sign-in flows, hard SPA navs)
+  // don't re-poison it. Blocked frames never run scripts, so this only
+  // helps AFTER a successful load — the repair path handles the rest.
+  try {
+    chrome.runtime.sendMessage({ action: 'shouldManageServiceWorkers' }, (response: { ok?: boolean } | undefined) => {
+      if (!response?.ok) {
+        return;
+      }
+      // Blocked-frame detection signal: a COMMITTED document runs this
+      // script at document_start; an XFO/partition-SW-blocked frame never
+      // runs anything. The sidebar treats the absence of this signal within
+      // the verify window as a hard embed failure (and engages auto-repair)
+      // — the parent-side view (SecurityError + no document) is identical
+      // for both, so this is the only reliable in-content discriminator.
+      void chrome.runtime
+        .sendMessage({ action: 'panelFrameBooted', url: location.href })
+        .catch(() => {});
+      const unregisterPartitionWorkers = () => {
+        navigator.serviceWorker
+          ?.getRegistrations()
+          .then((registrations) => {
+            for (const registration of registrations) {
+              void registration.unregister().catch(() => {});
+            }
+          })
+          .catch(() => {});
+      };
+      console.log(`${tag} managing partition service workers (interval 3s + pagehide)`);
+      unregisterPartitionWorkers();
+      setInterval(unregisterPartitionWorkers, 3000);
+      window.addEventListener('pagehide', unregisterPartitionWorkers);
+    });
+  } catch {
+    // Sandboxed/opaque-origin frames have no serviceWorker access — and
+    // the panel's sandbox keeps the frame's real origin (allow-same-origin),
+    // so genuine panel frames take the path above.
+  }
 })();

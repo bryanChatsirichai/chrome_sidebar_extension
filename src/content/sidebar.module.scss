@@ -699,8 +699,14 @@ $browser-sidebar-text-white: #fff;
     max-width: 280px;
   }
 
-  .open-tab-btn {
+  .fallback-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin-top: 8px;
+  }
+
+  .open-tab-btn {
     padding: 10px 20px;
     border: none;
     border-radius: 8px;
@@ -718,6 +724,32 @@ $browser-sidebar-text-white: #fff;
 
   .open-tab-btn:active {
     transform: scale(0.98);
+  }
+
+  .repair-btn {
+    padding: 9px 20px;
+    border: 1px solid $browser-sidebar-border;
+    border-radius: 8px;
+    background: transparent;
+    color: $browser-sidebar-text-muted;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  }
+
+  .repair-btn:hover {
+    color: $browser-sidebar-text-white;
+    border-color: $browser-sidebar-accent;
+  }
+
+  .repair-btn:active {
+    transform: scale(0.98);
+  }
+
+  .repair-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
   }
 
   .resize-handle {
