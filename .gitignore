@@ -1,5 +1,4 @@
 node_modules/
 dist/
 *.log
-/rea_operaGX
-/rea_edge
+/rea_*
