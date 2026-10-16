@@ -637,15 +637,25 @@ $browser-sidebar-text-white: #fff;
     overflow: hidden;
   }
 
+  /* Multiple per-pin frames stay stacked in the panel body (warm frames +
+     preloaded frames are mounted alongside the active one). */
   .panel-iframe {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     border: none;
     background: #fff;
   }
 
+  /* NEVER display:none — hidden frames still load/boot (warm reuse, hover
+     preload), and display:none freezes the frame's rAF/CSS animations,
+     which breaks sites that generate values from animation frames at load
+     time (x.com's x-client-transaction-id). Fully transparent instead;
+     the active frame sits on top via source order + the loading overlay. */
   .panel-iframe.hidden {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
   }
 
   /* Live resize gesture: the frame is width-locked (JS sets inline
@@ -672,6 +682,8 @@ $browser-sidebar-text-white: #fff;
   }
 
   .fallback-view {
+    position: absolute;
+    inset: 0;
     display: none;
     flex-direction: column;
     align-items: center;

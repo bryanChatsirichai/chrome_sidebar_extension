@@ -48,6 +48,16 @@ const IFRAME_WATCHDOG_INTERVAL_MS = 500;
  */
 const IFRAME_ERROR_PAGE_MAX_TEXT_LENGTH = 250;
 
+/**
+ * DNR session rules persist for the whole browser session, so a successful
+ * assert only needs re-checking after this window. Skipping the background
+ * roundtrip saves latency and cold service-worker wakes on every open.
+ */
+const EMBED_RULES_CACHE_TTL_MS = 60_000;
+
+/** Hover dwell before a speculative preload mounts the hidden frame. */
+const PIN_PRELOAD_HOVER_DELAY_MS = 150;
+
 /** Persists panel state; see persistPanelSession for the storage story. */
 export interface WarmFrameEntry {
   pinId: string;
@@ -104,6 +114,7 @@ export function SidebarApp({
   const iframeLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const preloadHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeVerifyGenerationRef = useRef(0);
   const embedFailureHandledRef = useRef(false);
   const draggedIndexRef = useRef<number | null>(null);
@@ -153,6 +164,12 @@ export function SidebarApp({
   // cross-origin frames — cleared for a pin's origin right before a fresh
   // navigation so a blocked retry can't inherit a stale success signal.
   const bootedOriginsRef = useRef<Set<string>>(new Set());
+  // Last successful DNR embed-rules assert: signature + timestamp of the
+  // pinned-url set it was asserted for. Lets ensureEmbedRulesReady skip the
+  // background roundtrip within EMBED_RULES_CACHE_TTL_MS (rules persist for
+  // the whole browser session).
+  const embedRulesAssertedAtRef = useRef(0);
+  const embedRulesSignatureRef = useRef('');
   // When the current verification cycle started (boot-grace window anchor).
   const verifyStartedAtRef = useRef(0);
   /** Live iframe elements by pinId — warm frames stay mounted while hidden. */
@@ -289,6 +306,13 @@ export function SidebarApp({
     if (iframeWatchdogTimerRef.current) {
       clearTimeout(iframeWatchdogTimerRef.current);
       iframeWatchdogTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPreloadHoverTimer = useCallback(() => {
+    if (preloadHoverTimerRef.current) {
+      clearTimeout(preloadHoverTimerRef.current);
+      preloadHoverTimerRef.current = null;
     }
   }, []);
 
@@ -646,6 +670,20 @@ export function SidebarApp({
    * messaging failure we still navigate; the 15s load-timeout net guards it.
    */
   const ensureEmbedRulesReady = useCallback(async () => {
+    // DNR session rules persist for the whole browser session. If we already
+    // asserted them for this exact set of pinned URLs within the TTL window,
+    // skip the background roundtrip (saves latency + cold worker wakes).
+    const signature = pinsRef.current
+      .map((p) => p.url)
+      .sort()
+      .join('|');
+    if (
+      signature === embedRulesSignatureRef.current &&
+      Date.now() - embedRulesAssertedAtRef.current < EMBED_RULES_CACHE_TTL_MS
+    ) {
+      console.log('[browser-sidebar] ensureEmbedRules: cached');
+      return;
+    }
     try {
       const response = await browserSidebarSafeSendMessage<{ ok?: boolean }>({ action: 'ensureEmbedRules' });
       // DEBUG: the background's answer gates the iframe navigation — its
@@ -654,12 +692,49 @@ export function SidebarApp({
         console.error('[browser-sidebar] ensureEmbedRules error response:', response);
       } else {
         console.log('[browser-sidebar] ensureEmbedRules ok:', response);
+        // Cache only on success — a failed assert must be retried.
+        embedRulesAssertedAtRef.current = Date.now();
+        embedRulesSignatureRef.current = signature;
       }
     } catch (error) {
       // Worker unreachable or extension context invalidated — proceed.
       console.warn('[browser-sidebar] ensureEmbedRules send failed:', error);
     }
   }, []);
+
+  /**
+   * Speculatively mounts a pin's hidden iframe (hover dwell / press) WITHOUT
+   * opening the panel, so the click that follows is warm-instant. Mirrors
+   * openPanelForPin's fresh-navigation guard.
+   */
+  const preloadPin = useCallback(
+    async (pin: Pin) => {
+      if (!browserSidebarRuntimeAlive()) return;
+      // Already mounted (loading or ready) for this src, or it's the live
+      // panel's own pin — nothing to warm.
+      if (warmFramesRef.current.some((f) => f.pinId === pin.id && f.src === pin.url)) return;
+      if (panelOpenRef.current && activePinIdRef.current === pin.id) return;
+      // Never evict a ready warm frame for a speculative preload.
+      if (warmFramesRef.current.length >= WARM_FRAME_LIMIT) return;
+
+      await ensureEmbedRulesReady();
+      if (!browserSidebarRuntimeAlive()) return; // re-check after the await
+
+      const nextNav = (navCounterRef.current.get(pin.id) ?? 0) + 1;
+      navCounterRef.current.set(pin.id, nextNav);
+      // Same fresh-nav guard as openPanelForPin: drop any stale boot signal
+      // for this origin so a blocked preload can't be verified by inheritance.
+      try {
+        bootedOriginsRef.current.delete(new URL(pin.url).origin);
+      } catch {
+        // Malformed pin URL — skip preloading entirely.
+        return;
+      }
+      console.log('[browser-sidebar] Preloading pin frame:', pin.name);
+      touchWarmFrame({ pinId: pin.id, src: pin.url, nav: nextNav, status: 'loading' });
+    },
+    [ensureEmbedRulesReady, touchWarmFrame]
+  );
 
   /**
    * Opens the panel for a pin. Warm frames (mounted, hidden, already
@@ -692,10 +767,25 @@ export function SidebarApp({
       const existing = warmFramesRef.current.find((f) => f.pinId === pin.id);
 
       if (existing && existing.src === pin.url && existing.status === 'ready') {
-        console.log('[browser-sidebar] Reusing warm frame:', pin.name);
-        touchWarmFrame(existing);
-        setPanelView('iframe');
-        return;
+        // Instant reuse only with proof the frame's scripts are running: a frame
+        // can reach 'ready' via onLoad alone, and blocked error pages fire onLoad
+        // too. Cross-origin reuse without a boot signal gets re-verified instead.
+        const bootOrigin = (() => {
+          try {
+            return new URL(pin.url).origin;
+          } catch {
+            return null;
+          }
+        })();
+        const sameOrigin = bootOrigin !== null && bootOrigin === window.location.origin;
+        if (sameOrigin || (bootOrigin !== null && bootedOriginsRef.current.has(bootOrigin))) {
+          console.log('[browser-sidebar] Reusing warm frame:', pin.name);
+          touchWarmFrame(existing);
+          setPanelView('iframe');
+          return;
+        }
+        console.warn('[browser-sidebar] Warm frame lacks boot proof — re-verifying:', pin.name);
+        // fall through to the loading path below (no remount, just re-verify)
       }
 
       setPanelView('loading');
@@ -783,8 +873,32 @@ export function SidebarApp({
     clearIframeWatchdog();
   }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, persistPanelSession]);
 
+  const handlePinHover = useCallback(
+    (pin: Pin) => {
+      clearPreloadHoverTimer();
+      preloadHoverTimerRef.current = setTimeout(() => {
+        preloadHoverTimerRef.current = null;
+        void preloadPin(pin);
+      }, PIN_PRELOAD_HOVER_DELAY_MS);
+    },
+    [clearPreloadHoverTimer, preloadPin]
+  );
+
+  const handlePinLeave = useCallback(() => {
+    clearPreloadHoverTimer();
+  }, [clearPreloadHoverTimer]);
+
+  const handlePinPress = useCallback(
+    (pin: Pin) => {
+      clearPreloadHoverTimer();
+      void preloadPin(pin);
+    },
+    [clearPreloadHoverTimer, preloadPin]
+  );
+
   const handlePinClick = useCallback(
     (pin: Pin) => {
+      clearPreloadHoverTimer();
       // DEBUG: entry point trace — which pin was clicked and the full state
       // the click landed on.
       console.log('[browser-sidebar] Pin clicked:', {
@@ -819,7 +933,7 @@ export function SidebarApp({
       panelOpenRef.current = true;
       openPanelForPin(pin);
     },
-    [activePinId, closePanel, openPanelForPin, panelOpen, settingsOpen]
+    [activePinId, clearPreloadHoverTimer, closePanel, openPanelForPin, panelOpen, settingsOpen]
   );
 
   handlePinClickRef.current = handlePinClick;
@@ -1468,6 +1582,14 @@ export function SidebarApp({
     return () => clearInterval(interval);
   }, []);
 
+  // Mount-only: make sure a pending preload dwell timer never fires after
+  // the sidebar unmounts (the callback would touch dead refs/state).
+  useEffect(() => {
+    return () => {
+      clearPreloadHoverTimer();
+    };
+  }, [clearPreloadHoverTimer]);
+
   const activePin = getActivePin();
 
   return (
@@ -1487,6 +1609,9 @@ export function SidebarApp({
         settingsOpen={settingsOpen}
         onPinClick={handlePinClick}
         onToggleSettings={toggleSettings}
+        onPinHover={handlePinHover}
+        onPinLeave={handlePinLeave}
+        onPinPress={handlePinPress}
       />
 
       <AppPanel

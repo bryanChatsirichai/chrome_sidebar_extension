@@ -71,8 +71,10 @@ export function AppPanel({
 
         {/*
           One dedicated iframe per pin that has been opened this session.
-          Warm (inactive) frames stay mounted with display:none — their
-          documents stay alive, so switching pins is instant. The key
+          Warm (inactive) frames stay mounted fully transparent (opacity: 0,
+          see .panel-iframe.hidden in sidebar.module.scss) — never
+          display:none, which would freeze the frame's rAF/CSS animations.
+          Their documents stay alive, so switching pins is instant. The key
           includes the nav counter so a forced refresh remounts the frame.
         */}
         {warmFrames.map((entry) => (
