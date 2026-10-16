@@ -62,18 +62,6 @@ void browserSidebarGetStorageData()
     console.warn('[browser-sidebar] Wake-time embed bypass re-sync failed:', error);
   });
 
-// Mirror session panel-state changes to every tab so the panel stays open
-// (or closed) consistently across all tabs of the browser session.
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'session' || !changes.browserSidebarPanelOpen) {
-    return;
-  }
-  const open = Boolean(changes.browserSidebarPanelOpen.newValue);
-  const pinId =
-    typeof changes.browserSidebarPanelPinId?.newValue === 'string' ? changes.browserSidebarPanelPinId.newValue : null;
-  void broadcastToAllTabs({ action: 'panelStateSynced', open, pinId });
-});
-
 chrome.runtime.onInstalled.addListener(async () => {
   await browserSidebarInitializeStorage();
   const data = await browserSidebarGetStorageData();

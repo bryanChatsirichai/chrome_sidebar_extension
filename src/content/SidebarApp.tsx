@@ -58,7 +58,7 @@ const EMBED_RULES_CACHE_TTL_MS = 60_000;
 /** Hover dwell before a speculative preload mounts the hidden frame. */
 const PIN_PRELOAD_HOVER_DELAY_MS = 150;
 
-/** Persists panel state; see persistPanelSession for the storage story. */
+/** Persists panel state across opens — warm frames stay mounted while hidden. */
 export interface WarmFrameEntry {
   pinId: string;
   src: string;
@@ -94,20 +94,15 @@ export type PanelView = 'idle' | 'loading' | 'iframe' | 'fallback';
 interface SidebarAppProps {
   initialPins: Pin[];
   initialSettings: Settings;
-  initialActivePinId: string | null;
   initialSidebarHidden: boolean;
   initialPanelWidth: number;
-  /** Session-global panel state: the panel reopens on new tabs/navigations. */
-  initialPanelOpen: boolean;
 }
 
 export function SidebarApp({
   initialPins,
   initialSettings,
-  initialActivePinId,
   initialSidebarHidden,
-  initialPanelWidth,
-  initialPanelOpen
+  initialPanelWidth
 }: SidebarAppProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -123,7 +118,7 @@ export function SidebarApp({
 
   const [pins, setPins] = useState(initialPins);
   const [settings, setSettings] = useState(initialSettings);
-  const [activePinId, setActivePinId] = useState(initialActivePinId);
+  const [activePinId, setActivePinId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(initialSidebarHidden);
@@ -182,23 +177,6 @@ export function SidebarApp({
   panelOpenRef.current = panelOpen;
   activePinIdRef.current = activePinId;
   pinsRef.current = pins;
-
-  /**
-   * Persists the panel session to chrome.storage.session (shared by every tab
-   * of this browser session). The background watches it and broadcasts
-   * `panelStateSynced`, so the open/closed panel state follows the user
-   * across tabs and survives same-tab navigations without reopening after a
-   * browser restart.
-   */
-  const persistPanelSession = useCallback((open: boolean, pinId: string | null) => {
-    try {
-      void chrome.storage.session
-        ?.set({ browserSidebarPanelOpen: open, browserSidebarPanelPinId: open ? pinId : null })
-        .catch(() => {});
-    } catch {
-      // Session storage is unavailable until the background grants access.
-    }
-  }, []);
 
   /** Commits the next warm-frame list (ref + state stay in lockstep). */
   const updateWarmFrames = useCallback((next: WarmFrameEntry[]) => {
@@ -751,7 +729,6 @@ export function SidebarApp({
         panelOpen: panelOpenRef.current
       });
 
-      persistPanelSession(true, pin.id);
       lastOpenedPinIdRef.current = pin.id;
       embedFailureHandledRef.current = false;
       // Fresh open = fresh auto-repair budget (the global cooldown still
@@ -847,7 +824,6 @@ export function SidebarApp({
       clearIframeWatchdog,
       ensureEmbedRulesReady,
       handleEmbedFailure,
-      persistPanelSession,
       startIframeVerification,
       touchWarmFrame
     ]
@@ -858,7 +834,6 @@ export function SidebarApp({
    * same pin is instant instead of a full reload.
    */
   const closePanel = useCallback(() => {
-    persistPanelSession(false, null);
     setPanelOpen(false);
     setPanelView('idle');
     // Clear the active pin so the strip highlight drops with the panel —
@@ -871,7 +846,7 @@ export function SidebarApp({
     clearIframeTimer();
     clearIframeVerifyTimer();
     clearIframeWatchdog();
-  }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog, persistPanelSession]);
+  }, [clearIframeTimer, clearIframeVerifyTimer, clearIframeWatchdog]);
 
   const handlePinHover = useCallback(
     (pin: Pin) => {
@@ -1379,33 +1354,8 @@ export function SidebarApp({
     return () => root.removeEventListener('wheel', onWheel);
   }, []);
 
-  /**
-   * Restores the session-global panel state on mount: when the panel was open
-   * in another tab (or before a same-tab navigation), it reopens here with
-   * the same pin so the sidebar feels persistent across tabs.
-   */
   useEffect(() => {
-    if (!initialPanelOpen) {
-      return;
-    }
-    const pin =
-      pinsRef.current.find((p) => p.id === activePinIdRef.current) ?? pinsRef.current[0];
-    if (!pin) {
-      return;
-    }
-    setActivePinId(pin.id);
-    activePinIdRef.current = pin.id;
-    void browserSidebarSafeSendMessage({ action: 'saveLastActivePin', pinId: pin.id });
-    setPanelOpen(true);
-    panelOpenRef.current = true;
-    openPanelForPin(pin);
-    // Mount-only restore; re-running on dependency changes would remount the
-    // panel iframe on every pin/settings update.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; pinId?: string; open?: boolean; level?: string; messageText?: string; payload?: unknown; url?: string; error?: string; frameId?: number }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; level?: string; messageText?: string; payload?: unknown; url?: string; error?: string; frameId?: number }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
       if (message.action === 'netLog') {
         // DEBUG: mirror of background webRequest observations — see background.ts.
         const fn = message.level === 'error' ? console.error : console.log;
@@ -1524,27 +1474,6 @@ export function SidebarApp({
           }
         }
 
-        sendResponse({ ok: true });
-      }
-
-      if (message.action === 'panelStateSynced') {
-        // Another tab opened/closed the panel: mirror it here. No-op when
-        // already in the target state, which also breaks broadcast loops.
-        if (message.open && typeof message.pinId === 'string') {
-          const pin = pinsRef.current.find((p) => p.id === message.pinId);
-          if (pin && (!panelOpenRef.current || activePinIdRef.current !== message.pinId)) {
-            setActivePinId(pin.id);
-            activePinIdRef.current = message.pinId;
-            void chrome.runtime
-              .sendMessage({ action: 'saveLastActivePin', pinId: message.pinId })
-              .catch(() => {});
-            setPanelOpen(true);
-            panelOpenRef.current = true;
-            openPanelForPin(pin);
-          }
-        } else if (!message.open && panelOpenRef.current) {
-          closePanel();
-        }
         sendResponse({ ok: true });
       }
 
