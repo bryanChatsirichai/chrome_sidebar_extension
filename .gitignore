@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.log
 /rea_*
+/graphify-out
