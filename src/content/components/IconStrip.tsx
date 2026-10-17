@@ -7,6 +7,11 @@ interface IconStripProps {
   settingsOpen: boolean;
   onPinClick: (pin: Pin) => void;
   onToggleSettings: () => void;
+  /** Speculative preload hooks: hover (with dwell) / press warm the pin's
+   *  hidden frame before the click, so the open is instant. */
+  onPinHover?: (pin: Pin) => void;
+  onPinLeave?: () => void;
+  onPinPress?: (pin: Pin) => void;
 }
 
 export function IconStrip({
@@ -14,7 +19,10 @@ export function IconStrip({
   activePinId,
   settingsOpen,
   onPinClick,
-  onToggleSettings
+  onToggleSettings,
+  onPinHover,
+  onPinLeave,
+  onPinPress
 }: IconStripProps) {
   return (
     <aside className="icon-strip" part="icon-strip">
@@ -26,6 +34,9 @@ export function IconStrip({
           title={pin.name}
           data-pin-id={pin.id}
           onClick={() => onPinClick(pin)}
+          onPointerEnter={() => onPinHover?.(pin)}
+          onPointerLeave={() => onPinLeave?.()}
+          onPointerDown={() => onPinPress?.(pin)}
         >
           {pin.iconUrl ? (
             <img src={resolveIconUrl(pin.iconUrl)} alt={pin.name} />

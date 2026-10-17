@@ -81,6 +81,11 @@ export async function browserSidebarSyncEmbedBypassRules(pins: Pin[]): Promise<v
 
   const requestDomains = browserSidebarGetPinHostnames(pins);
 
+  // DEBUG: the exact domain list the rules will match — the first thing to
+  // check when a pinned site (e.g. x.com) fails is whether its final domain
+  // (after redirects, e.g. twitter.com) is actually in here.
+  console.log('[browser-sidebar] Syncing embed bypass rules for domains:', requestDomains);
+
   if (requestDomains.length === 0) {
     await chrome.declarativeNetRequest
       .updateSessionRules({ removeRuleIds: [EMBED_BYPASS_RULE_ID, SEC_FETCH_SPOOF_RULE_ID] })
@@ -151,5 +156,19 @@ export async function browserSidebarSyncEmbedBypassRules(pins: Pin[]): Promise<v
     });
   } catch (error) {
     console.error('[browser-sidebar] Failed to sync Sec-Fetch spoof rules:', error);
+  }
+
+  // DEBUG: confirm what is actually installed after both updates.
+  try {
+    const rules = await chrome.declarativeNetRequest.getSessionRules();
+    console.log(
+      '[browser-sidebar] Active DNR session rules:',
+      rules.map((rule) => ({
+        id: rule.id,
+        condition: rule.condition
+      }))
+    );
+  } catch {
+    // Read-back is best-effort.
   }
 }

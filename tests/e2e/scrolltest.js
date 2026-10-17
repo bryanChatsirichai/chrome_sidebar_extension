@@ -28,6 +28,12 @@ const EMBED_URL = 'http://127.0.0.1:8931/scroll.html';
       pins.push({ id: 'scrolltest', name: 'Scroll Test', url: embedUrl, iconUrl: '', order: 99 });
       await chrome.storage.sync.set({ pins });
     }
+    // Determinism guard (known quirk): this test clicks the scrolltest pin
+    // (last strip slot). A previous passing run saves lastActivePinId=
+    // 'scrolltest' via saveLastActivePin, which makes the next run's click
+    // take the deselect branch (same pin, panel closed) — self-sustaining
+    // failure. Point lastActivePinId at a pin this test never clicks.
+    await chrome.storage.sync.set({ lastActivePinId: 'x' });
     await chrome.runtime.sendMessage({ action: 'broadcastPinsUpdated', pins });
     return pins.length;
   }, EMBED_URL);
