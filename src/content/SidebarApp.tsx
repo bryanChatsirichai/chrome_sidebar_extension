@@ -1033,6 +1033,18 @@ export function SidebarApp({
     setPinForm({ name: '', url: '', iconUrl: '' });
   }, []);
 
+  // Settings form state is per-open ephemeral: closing the settings panel —
+  // via ANY path (toggle button, close X, outside click, pin click, reset) —
+  // discards a half-filled add/edit form instead of rehydrating it stale on
+  // the next open.
+  const settingsWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (settingsWasOpenRef.current && !settingsOpen) {
+      resetPinForm();
+    }
+    settingsWasOpenRef.current = settingsOpen;
+  }, [settingsOpen, resetPinForm]);
+
   const beginEditPin = useCallback((pin: Pin) => {
     setEditingPinId(pin.id);
     setPinForm({ name: pin.name, url: pin.url, iconUrl: pin.iconUrl });
