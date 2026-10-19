@@ -5,7 +5,7 @@ const PAGE_URL = 'http://127.0.0.1:8931/test.html';
 
 const readState = (label) => page.evaluate((l) => {
   const html = document.documentElement;
-  const ids = ['marker', 'fixed-el', 'fixed-bar', 'fixed-corner', 'fixed-modal'];
+  const ids = ['marker', 'fixed-el', 'fixed-bar', 'fixed-corner', 'fixed-modal', 'abs-app-root', 'abs-app-content', 'abs-in-flow'];
   const out = { label: l, htmlClasses: html.className, marginLeft: getComputedStyle(html).marginLeft, clientWidth: html.clientWidth };
   for (const id of ids) {
     const el = document.getElementById(id);
@@ -106,6 +106,9 @@ let page;
   check('strip: full-width bar shifted to 48', near(baseline['fixed-bar'].left, 48), baseline['fixed-bar']);
   check('strip: right-anchored corner button untouched', near(baseline['fixed-corner'].left, cornerLeft), { expected: cornerLeft, actual: baseline['fixed-corner'] });
   check('strip: centered modal beyond strip stays put', near(baseline['fixed-modal'].left, modalBaseLeft), { expected: modalBaseLeft, actual: baseline['fixed-modal'] });
+  check('strip: ICB-absolute app root shifted to 48 (ytd-app pattern)', near(baseline['abs-app-root'].left, 48), baseline['abs-app-root']);
+  check('strip: fixed child of shifted abs root follows (no double shift)', near(baseline['abs-app-content'].left, 48), baseline['abs-app-content']);
+  check('strip: abs element in positioned parent NOT double shifted', baseline['abs-in-flow'].left === 48, baseline['abs-in-flow']);
 
   check('overlay: html class is open', openState.htmlClasses === 'browser-sidebar-open', openState.htmlClasses);
   check('overlay: page NOT pushed (margin stays strip width)', openState.marginLeft === '48px', openState.marginLeft);

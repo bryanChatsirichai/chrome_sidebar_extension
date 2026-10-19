@@ -62,6 +62,45 @@
     z-index: 100;
     transform: translate(-50%, -50%);
   }
+  /* app root anchored to the ICB via absolute positioning (YouTube ytd-app
+     pattern): the html margin cannot move it — fixedShift must shift it */
+  .abs-app-root {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    min-height: 100%;
+    z-index: 99;
+    pointer-events: none;
+  }
+  .abs-app-root .inner-content {
+    position: fixed;
+    bottom: 90px;
+    left: 0;
+    width: 160px;
+    height: 30px;
+    background: #009aa6;
+    color: #fff;
+    font: 13px sans-serif;
+    pointer-events: auto;
+  }
+  /* absolute element INSIDE a positioned ancestor — must NOT be shifted
+     (follows the html margin like in-flow content) */
+  .positioned-parent {
+    position: relative;
+    height: 0;
+  }
+  .abs-in-flow {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 90px;
+    height: 20px;
+    background: #333;
+    color: #fff;
+    font: 11px sans-serif;
+    z-index: 99;
+  }
 </style>
 </head>
 <body>
@@ -69,6 +108,12 @@
   <div class="fixed-el" id="fixed-el">fixed-el at left:0</div>
   <div class="fixed-corner" id="fixed-corner"></div>
   <div class="fixed-modal" id="fixed-modal">centered modal</div>
+  <div class="abs-app-root" id="abs-app-root">
+    <div class="inner-content" id="abs-app-content">abs app root</div>
+  </div>
+  <div class="positioned-parent">
+    <div class="abs-in-flow" id="abs-in-flow">abs in positioned parent</div>
+  </div>
   <div class="marker" id="marker">PAGE CONTENT at document left edge</div>
   <div class="spacer"></div>
 </body>
