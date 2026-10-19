@@ -304,6 +304,16 @@ chrome.webRequest.onErrorOccurred.addListener((details) => {
 
 // --- Runtime message handlers ---
 
+// Push zoom changes to the tab's content script so the sidebar can keep its
+// counter-scale in sync while the user Ctrl+/-zooms the page.
+chrome.tabs.onZoomChange.addListener((change) => {
+  void chrome.tabs
+    .sendMessage(change.tabId, { action: 'pageZoomChanged', zoom: change.newZoomFactor })
+    .catch(() => {
+      // Tab gone or no listener — nothing to do.
+    });
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'openTab' && message.url) {
     chrome.tabs.create({ url: message.url });
@@ -325,6 +335,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then(() => browserSidebarSyncEmbedSupport(nextPins))
       .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.action === 'getZoomFactor') {
+    // Content scripts can't call chrome.tabs.*; the background reports the
+    // sender tab's browser-zoom factor so the sidebar can counter-scale.
+    const tabId = sender.tab?.id;
+    if (typeof tabId !== 'number') {
+      sendResponse({ ok: false, zoom: 1 });
+      return false;
+    }
+    void chrome.tabs
+      .getZoom(tabId)
+      .then((zoom) => sendResponse({ ok: true, zoom }))
+      .catch(() => sendResponse({ ok: false, zoom: 1 }));
     return true;
   }
 

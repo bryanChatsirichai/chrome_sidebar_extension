@@ -10,7 +10,8 @@ import {
   applyLayoutClasses,
   setCssVariables,
   setPageResizeActive,
-  setPanelWidthCss
+  setPanelWidthCss,
+  setSidebarZoomFactor
 } from './sidebarUtils';
 import { refreshFixedElementShift } from './fixedShift';
 
@@ -135,6 +136,17 @@ export function SidebarApp({
   const [pinForm, setPinForm] = useState({ name: '', url: '', iconUrl: '' });
   const [resizeDragging, setResizeDragging] = useState(false);
   const [sliderResizing, setSliderResizing] = useState(false);
+  // Browser zoom of this tab (1 = 100%): the sidebar counter-scales so it
+  // renders at the same physical size regardless of page zoom.
+  const [zoomFactor, setZoomFactor] = useState(1);
+  const zoomFactorRef = useRef(1);
+  // Mirrors panelWidth synchronously: the storage.onChanged listener must
+  // compare against the latest committed width even before React re-renders.
+  const panelWidthRef = useRef(panelWidth);
+  // True while a drag/slider width gesture is live in THIS tab: external
+  // width changes (storage.onChanged from other tabs) are ignored so they
+  // can't fight an in-progress gesture.
+  const widthGestureActiveRef = useRef(false);
 
   const panelOpenRef = useRef(panelOpen);
   const activePinIdRef = useRef(activePinId);
@@ -1225,6 +1237,7 @@ export function SidebarApp({
       const startWidth = panelWidth;
       let currentWidth = startWidth;
       let frame: number | null = null;
+      widthGestureActiveRef.current = true;
       setResizeDragging(true);
       setPageResizeActive(true);
 
@@ -1239,7 +1252,10 @@ export function SidebarApp({
       // Live updates bypass React state entirely: the CSS variable is
       // written imperatively at most once per animation frame.
       const onMove = (moveEvent: PointerEvent) => {
-        const delta = moveEvent.clientX - startX;
+        // Pointer deltas arrive in page CSS px (scaled by browser zoom);
+        // panelWidth renders 1:1 in physical px (root counter-scale), so
+        // multiply by the zoom factor to keep the edge tracking the cursor.
+        const delta = (moveEvent.clientX - startX) * zoomFactorRef.current;
         currentWidth = browserSidebarClamp(
           Math.round(startWidth + delta),
           BROWSER_SIDEBAR_DEFAULTS.PANEL_MIN_WIDTH,
@@ -1275,26 +1291,83 @@ export function SidebarApp({
           iframeRef.current.style.width = '';
         }
         // Single React state + storage commit at the end of the gesture.
+        // Same commit path as the settings slider (saveAndBroadcast):
+        // storage write + pinsUpdated broadcast, so every other open tab
+        // converges on the new width. The old direct storage write left
+        // already-loaded tabs on their old width — the "different sidebar
+        // width on different sites" bug.
+        widthGestureActiveRef.current = false;
+        panelWidthRef.current = currentWidth;
         setPanelWidth(currentWidth);
         setSettings((prev) => ({ ...prev, panelWidth: currentWidth }));
-        void chrome.storage.sync.set({
-          settings: { ...settings, panelWidth: currentWidth }
-        });
+        void saveAndBroadcast(pins, { ...settings, panelWidth: currentWidth }, currentWidth);
       };
 
       handle.addEventListener('pointermove', onMove);
       handle.addEventListener('pointerup', onEnd);
       handle.addEventListener('pointercancel', onEnd);
     },
-    [panelWidth, settings]
+    [panelWidth, pins, saveAndBroadcast, settings]
   );
 
   useEffect(() => {
+    panelWidthRef.current = panelWidth;
     setCssVariables(panelWidth, rootRef.current);
     // A committed width change (drag/slider end) can newly intrude on fixed
     // elements that were previously clear of the sidebar.
     refreshFixedElementShift();
   }, [panelWidth]);
+
+  // Fetch the tab's browser zoom once at mount (background chrome.tabs.getZoom
+  // roundtrip — content scripts cannot call chrome.tabs.*).
+  useEffect(() => {
+    void browserSidebarSafeSendMessage<{ ok?: boolean; zoom?: number }>({
+      action: 'getZoomFactor'
+    }).then((response) => {
+      if (typeof response?.zoom === 'number' && response.zoom > 0 && response.zoom !== 1) {
+        setZoomFactor(response.zoom);
+      }
+    });
+  }, []);
+
+  // Apply zoom compensation: counter-scaled sidebar root + zoom-divided strip
+  // width var (drives page margin + fixed-element shift). Page CSS-px layout
+  // is unchanged by zoom, but the shift var change warrants a fresh sweep.
+  useEffect(() => {
+    zoomFactorRef.current = zoomFactor;
+    setSidebarZoomFactor(zoomFactor, rootRef.current);
+    refreshFixedElementShift();
+  }, [zoomFactor]);
+
+  // Convergence net for width changes made anywhere else: another tab's
+  // resize (broadcast missed / message port dead), the popup, or cross-device
+  // chrome.storage.sync. storage.onChanged fires in every extension context,
+  // including the writer (caught by the equality check) — but NOT for changes
+  // made before this tab loaded, whose width is already correct at mount.
+  useEffect(() => {
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ): void => {
+      if (areaName !== 'sync') {
+        return;
+      }
+      const nextWidth = (changes.settings?.newValue as { panelWidth?: number } | undefined)
+        ?.panelWidth;
+      if (typeof nextWidth !== 'number' || nextWidth === panelWidthRef.current) {
+        return;
+      }
+      // Never let an external change fight a live drag/slider gesture here.
+      if (widthGestureActiveRef.current) {
+        return;
+      }
+      setPanelWidth(nextWidth);
+      setSettings((prev) => ({ ...prev, panelWidth: nextWidth }));
+    };
+
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    return () => chrome.storage.onChanged.removeListener(onStorageChanged);
+  }, []);
 
   useEffect(() => {
     applyLayoutClasses(sidebarHidden, panelOpen, settingsOpen);
@@ -1355,7 +1428,7 @@ export function SidebarApp({
   }, []);
 
   useEffect(() => {
-    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; level?: string; messageText?: string; payload?: unknown; url?: string; error?: string; frameId?: number }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    const listener = (message: { action?: string; hidden?: boolean; pins?: Pin[]; settings?: Settings; level?: string; messageText?: string; payload?: unknown; url?: string; error?: string; frameId?: number; zoom?: number }, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
       if (message.action === 'netLog') {
         // DEBUG: mirror of background webRequest observations — see background.ts.
         const fn = message.level === 'error' ? console.error : console.log;
@@ -1474,6 +1547,15 @@ export function SidebarApp({
           }
         }
 
+        sendResponse({ ok: true });
+      }
+
+      if (message.action === 'pageZoomChanged') {
+        // Live zoom tracking (background tabs.onZoomChange): keep the
+        // sidebar's counter-scale in sync while the user zooms the page.
+        if (typeof message.zoom === 'number' && message.zoom > 0) {
+          setZoomFactor(message.zoom);
+        }
         sendResponse({ ok: true });
       }
 
@@ -1596,6 +1678,7 @@ export function SidebarApp({
         onPanelWidthChange={(width) => {
           // Live slider updates: CSS variable only, no React state per input
           // event — the width label lives in SettingsPanel local state.
+          widthGestureActiveRef.current = true;
           setSliderResizing(true);
           setPageResizeActive(true);
           // Lock the iframe at the pre-gesture width on the first change
@@ -1622,6 +1705,8 @@ export function SidebarApp({
           }
           setSliderResizing(false);
           setPageResizeActive(false);
+          widthGestureActiveRef.current = false;
+          panelWidthRef.current = width;
           setPanelWidth(width);
           setSettings((prev) => ({ ...prev, panelWidth: width }));
           void saveAndBroadcast(pins, { ...settings, panelWidth: width }, width);

@@ -1,4 +1,5 @@
 import { BROWSER_SIDEBAR_DEFAULTS } from '../lib/defaults';
+import { getSidebarZoomFactor } from './sidebarUtils';
 
 /**
  * Shifts `position: fixed` page elements right of the browser-sidebar.
@@ -62,7 +63,8 @@ let pendingRecords: MutationRecord[] = [];
  * is always the strip width; only the strip needs to be cleared of fixed
  * elements. Computed from the page-shift classes — NOT from the computed
  * `--browser-sidebar-shift` (unregistered custom properties keep their
- * calc() token form, which parseFloat() cannot read).
+ * calc() token form, which parseFloat() cannot read). Zoom-compensated so the
+ * physical shift stays STRIP_WIDTH device px at any browser zoom.
  */
 function currentShiftPx(): number {
   const html = document.documentElement;
@@ -73,7 +75,7 @@ function currentShiftPx(): number {
     html.classList.contains('browser-sidebar-open') ||
     html.classList.contains('browser-sidebar-strip-visible')
   ) {
-    return BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH;
+    return BROWSER_SIDEBAR_DEFAULTS.STRIP_WIDTH / getSidebarZoomFactor();
   }
   return 0;
 }
