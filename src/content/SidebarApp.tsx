@@ -1033,6 +1033,18 @@ export function SidebarApp({
     setPinForm({ name: '', url: '', iconUrl: '' });
   }, []);
 
+  // Settings form state is per-open ephemeral: closing the settings panel —
+  // via ANY path (toggle button, close X, outside click, pin click, reset) —
+  // discards a half-filled add/edit form instead of rehydrating it stale on
+  // the next open.
+  const settingsWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (settingsWasOpenRef.current && !settingsOpen) {
+      resetPinForm();
+    }
+    settingsWasOpenRef.current = settingsOpen;
+  }, [settingsOpen, resetPinForm]);
+
   const beginEditPin = useCallback((pin: Pin) => {
     setEditingPinId(pin.id);
     setPinForm({ name: pin.name, url: pin.url, iconUrl: pin.iconUrl });
@@ -1404,6 +1416,27 @@ export function SidebarApp({
   }, [panelOpen, settingsOpen, closePanel]);
 
   /**
+   * Tab-switch teardown: leaving the tab closes any open panel — switching
+   * back to the tab shows no panel (the user must click a pin again). Uses
+   * document visibility (not a background tabs.onActivated roundtrip) so it
+   * fires even while the service worker is suspended.
+   */
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') {
+        return;
+      }
+      if (panelOpen) {
+        closePanel();
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [panelOpen, settingsOpen, closePanel]);
+
+  /**
    * Scroll isolation for sidebar chrome: wheel events over non-scrollable
    * sidebar surfaces (panel header, fallback view, resize handle, strip
    * padding) must not scroll the host page underneath. Scrollable surfaces
@@ -1623,6 +1656,13 @@ export function SidebarApp({
         onPinHover={handlePinHover}
         onPinLeave={handlePinLeave}
         onPinPress={handlePinPress}
+        onPinDragStart={(index) => {
+          draggedIndexRef.current = index;
+        }}
+        onPinDragEnd={() => {
+          draggedIndexRef.current = null;
+        }}
+        onPinDropPin={(index) => void handleDropPin(index)}
       />
 
       <AppPanel

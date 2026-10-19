@@ -2,7 +2,11 @@ import { BROWSER_SIDEBAR_DEFAULTS } from '../lib/defaults';
 import { getSidebarZoomFactor } from './sidebarUtils';
 
 /**
- * Shifts `position: fixed` page elements right of the browser-sidebar.
+ * Shifts viewport-anchored page elements right of the browser-sidebar:
+ * `position: fixed` elements, plus `position: absolute` elements whose
+ * containing block is the initial containing block (e.g. YouTube's ytd-app
+ * app root) — both ignore the html margin and would otherwise sit under
+ * the sidebar strip.
  *
  * The page itself is shifted by the injected page-shift stylesheet
  * (`html { margin-left: … }`), which only moves normal-flow content: fixed
@@ -85,6 +89,62 @@ function isSidebarHostSubtree(el: Element): boolean {
   return Boolean(host && (el === host || host.contains(el)));
 }
 
+/**
+ * True when an element's containing block is the initial containing block —
+ * i.e. it is viewport-anchored like a fixed element even though its position
+ * is `absolute` (no positioned / transform / filter / will-change / contain
+ * ancestor between it and the document element). YouTube's `ytd-app` is the
+ * canonical case: an absolute app root at left:0 that the html margin cannot
+ * move, so without this check the marked masthead shifts while the content
+ * below it (and the site's own guide drawer) stay put, malforming the page.
+ */
+function isViewportAnchored(el: Element): boolean {
+  let parent: Element | null = el.parentElement;
+  while (parent) {
+    const cs = getComputedStyle(parent);
+    if (cs.position !== 'static') {
+      return false;
+    }
+    if (
+      cs.transform !== 'none' ||
+      cs.perspective !== 'none' ||
+      cs.filter !== 'none' ||
+      cs.backdropFilter !== 'none'
+    ) {
+      return false;
+    }
+    const will = cs.willChange;
+    if (will.includes('transform') || will.includes('perspective') || will.includes('filter')) {
+      return false;
+    }
+    const contain = cs.contain;
+    if (
+      contain.includes('layout') ||
+      contain.includes('paint') ||
+      contain.includes('content') ||
+      contain.includes('strict')
+    ) {
+      return false;
+    }
+    if (cs.containerType !== 'normal' && cs.containerType !== '') {
+      return false;
+    }
+    parent = parent.parentElement;
+  }
+  return true;
+}
+
+/**
+ * Fixed elements always qualify; absolute ones only when anchored to the
+ * ICB (viewport-anchored). Everything else follows the html margin.
+ */
+function isShiftablePosition(el: Element, cs: CSSStyleDeclaration): boolean {
+  if (cs.position === 'fixed') {
+    return true;
+  }
+  return cs.position === 'absolute' && isViewportAnchored(el);
+}
+
 function removeOverride(el: Element): void {
   const props = savedInline.get(el);
   if (!props) {
@@ -117,19 +177,49 @@ function applyOverride(el: Element, fullWidth: boolean, computedWidth: string): 
   el.setAttribute(MARKER, '');
 }
 
+/** True when an ancestor is already managed — the element rides that
+ *  ancestor's translate and must never be marked again (double shift). */
+function hasMarkedAncestor(el: Element): boolean {
+  let parent: Element | null = el.parentElement;
+  while (parent) {
+    if (savedInline.has(parent)) {
+      return true;
+    }
+    parent = parent.parentElement;
+  }
+  return false;
+}
+
+/** After marking `el`, any managed descendant that is now clear of the
+ *  sidebar (shifted by el's translate) must be released — it would otherwise
+ *  double-shift. Runs in the same synchronous pass, so measurements see the
+ *  just-written translate. */
+function releaseRedundantDescendants(el: Element, shift: number): void {
+  for (const desc of el.querySelectorAll('*')) {
+    if (!savedInline.has(desc)) {
+      continue;
+    }
+    const rect = desc.getBoundingClientRect();
+    if (rect.left >= shift - 0.5) {
+      removeOverride(desc);
+    }
+  }
+}
+
 /**
  * Single-element check: applies the override if the element is a visible
- * fixed element intruding into the sidebar area. Read-only otherwise.
+ * viewport-anchored (fixed / ICB-absolute) element intruding into the
+ * sidebar area. Read-only otherwise.
  */
 function checkElement(el: Element, shift: number): void {
-  if (savedInline.has(el) || isSidebarHostSubtree(el)) {
+  if (savedInline.has(el) || isSidebarHostSubtree(el) || hasMarkedAncestor(el)) {
     return;
   }
   if (el === document.documentElement || el === document.body) {
     return;
   }
   const cs = getComputedStyle(el);
-  if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden') {
+  if (cs.display === 'none' || cs.visibility === 'hidden' || !isShiftablePosition(el, cs)) {
     return;
   }
   const rect = el.getBoundingClientRect();
@@ -141,6 +231,7 @@ function checkElement(el: Element, shift: number): void {
   }
   const fullWidth = rect.width >= window.innerWidth - FULL_WIDTH_TOLERANCE_PX;
   applyOverride(el, fullWidth, cs.width);
+  releaseRedundantDescendants(el, shift);
 }
 
 /**
@@ -225,7 +316,7 @@ function handleRecords(records: MutationRecord[]): void {
       const el = record.target;
       if (savedInline.has(el)) {
         const cs = getComputedStyle(el);
-        if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden') {
+        if (cs.display === 'none' || cs.visibility === 'hidden' || !isShiftablePosition(el, cs)) {
           removeOverride(el);
         }
       } else {

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Pin } from '../../lib/types';
 import { resolveIconUrl } from '../../lib/pin-utils';
 
@@ -12,6 +13,10 @@ interface IconStripProps {
   onPinHover?: (pin: Pin) => void;
   onPinLeave?: () => void;
   onPinPress?: (pin: Pin) => void;
+  /** Drag-to-reorder hooks, mirroring the SettingsPanel wiring. */
+  onPinDragStart?: (index: number) => void;
+  onPinDragEnd?: () => void;
+  onPinDropPin?: (index: number) => void;
 }
 
 export function IconStrip({
@@ -22,21 +27,73 @@ export function IconStrip({
   onToggleSettings,
   onPinHover,
   onPinLeave,
-  onPinPress
+  onPinPress,
+  onPinDragStart,
+  onPinDragEnd,
+  onPinDropPin
 }: IconStripProps) {
+  const [dragging, setDragging] = useState(false);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  const clearDragState = () => {
+    setDragging(false);
+    setDropIndex(null);
+    setDragIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    clearDragState();
+    // Idempotent: handleDropPin already nulled the ref on drop; the
+    // dragend that follows drop just nulls it again (harmless).
+    onPinDragEnd?.();
+  };
+
   return (
     <aside className="icon-strip" part="icon-strip">
-      {pins.map((pin) => (
+      {pins.map((pin, index) => (
         <button
           key={pin.id}
-          className={`pin-button${activePinId === pin.id ? ' active' : ''}`}
+          className={`pin-button${activePinId === pin.id ? ' active' : ''}${dragIndex === index ? ' dragging' : ''}${dropIndex === index ? ' drop-target' : ''}`}
           type="button"
           title={pin.name}
           data-pin-id={pin.id}
-          onClick={() => onPinClick(pin)}
-          onPointerEnter={() => onPinHover?.(pin)}
-          onPointerLeave={() => onPinLeave?.()}
-          onPointerDown={() => onPinPress?.(pin)}
+          draggable
+          onClick={() => {
+            if (!dragging) {
+              onPinClick(pin);
+            }
+          }}
+          onPointerEnter={() => {
+            if (!dragging) {
+              onPinHover?.(pin);
+            }
+          }}
+          onPointerLeave={() => {
+            if (!dragging) {
+              onPinLeave?.();
+            }
+          }}
+          onPointerDown={() => {
+            if (!dragging) {
+              onPinPress?.(pin);
+            }
+          }}
+          onDragStart={() => {
+            setDragging(true);
+            setDragIndex(index);
+            onPinDragStart?.(index);
+          }}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDropIndex(index === dragIndex ? null : index);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            clearDragState();
+            onPinDropPin?.(index);
+          }}
         >
           {pin.iconUrl ? (
             <img src={resolveIconUrl(pin.iconUrl)} alt={pin.name} />
