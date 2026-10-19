@@ -31,17 +31,17 @@ export const BROWSER_SIDEBAR_DEFAULTS = {
       order: 2
     },
     {
-      id: 'youtube',
-      name: 'YouTube',
-      url: 'https://www.youtube.com',
-      iconUrl: 'icons/apps/youtube.svg',
+      id: 'reddit',
+      name: 'Reddit',
+      url: 'https://www.reddit.com',
+      iconUrl: 'icons/apps/reddit.svg',
       order: 3
     },
     {
-      id: 'youtube-music',
-      name: 'YouTube Music',
-      url: 'https://music.youtube.com',
-      iconUrl: 'icons/apps/youtube-music.svg',
+      id: 'discord',
+      name: 'Discord',
+      url: 'https://discord.com/app',
+      iconUrl: 'icons/apps/discord.svg',
       order: 4
     },
     {
