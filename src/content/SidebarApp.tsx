@@ -1404,6 +1404,27 @@ export function SidebarApp({
   }, [panelOpen, settingsOpen, closePanel]);
 
   /**
+   * Tab-switch teardown: leaving the tab closes any open panel — switching
+   * back to the tab shows no panel (the user must click a pin again). Uses
+   * document visibility (not a background tabs.onActivated roundtrip) so it
+   * fires even while the service worker is suspended.
+   */
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') {
+        return;
+      }
+      if (panelOpen) {
+        closePanel();
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [panelOpen, settingsOpen, closePanel]);
+
+  /**
    * Scroll isolation for sidebar chrome: wheel events over non-scrollable
    * sidebar surfaces (panel header, fallback view, resize handle, strip
    * padding) must not scroll the host page underneath. Scrollable surfaces
