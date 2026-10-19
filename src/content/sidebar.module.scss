@@ -637,15 +637,25 @@ $browser-sidebar-text-white: #fff;
     overflow: hidden;
   }
 
+  /* Multiple per-pin frames stay stacked in the panel body (warm frames +
+     preloaded frames are mounted alongside the active one). */
   .panel-iframe {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     border: none;
     background: #fff;
   }
 
+  /* NEVER display:none — hidden frames still load/boot (warm reuse, hover
+     preload), and display:none freezes the frame's rAF/CSS animations,
+     which breaks sites that generate values from animation frames at load
+     time (x.com's x-client-transaction-id). Fully transparent instead;
+     the active frame sits on top via source order + the loading overlay. */
   .panel-iframe.hidden {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
   }
 
   /* Live resize gesture: the frame is width-locked (JS sets inline
@@ -654,7 +664,26 @@ $browser-sidebar-text-white: #fff;
     pointer-events: none;
   }
 
+  .reload-notice {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 2147483647;
+    background: $browser-sidebar-accent;
+    color: $browser-sidebar-text-white;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 6px 10px;
+    border-radius: 0 0 8px 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    max-width: 200px;
+  }
+
   .fallback-view {
+    position: absolute;
+    inset: 0;
     display: none;
     flex-direction: column;
     align-items: center;
@@ -699,8 +728,14 @@ $browser-sidebar-text-white: #fff;
     max-width: 280px;
   }
 
-  .open-tab-btn {
+  .fallback-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin-top: 8px;
+  }
+
+  .open-tab-btn {
     padding: 10px 20px;
     border: none;
     border-radius: 8px;
@@ -718,6 +753,32 @@ $browser-sidebar-text-white: #fff;
 
   .open-tab-btn:active {
     transform: scale(0.98);
+  }
+
+  .repair-btn {
+    padding: 9px 20px;
+    border: 1px solid $browser-sidebar-border;
+    border-radius: 8px;
+    background: transparent;
+    color: $browser-sidebar-text-muted;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  }
+
+  .repair-btn:hover {
+    color: $browser-sidebar-text-white;
+    border-color: $browser-sidebar-accent;
+  }
+
+  .repair-btn:active {
+    transform: scale(0.98);
+  }
+
+  .repair-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
   }
 
   .resize-handle {

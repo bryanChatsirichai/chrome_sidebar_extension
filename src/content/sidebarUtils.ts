@@ -16,48 +16,27 @@ export function injectPageShiftStyles(): void {
 export async function loadSidebarStorage(): Promise<{
   pins: Pin[];
   settings: Settings;
-  activePinId: string | null;
   sidebarHidden: boolean;
   panelWidth: number;
-  panelSession: { open: boolean; pinId: string | null };
 }> {
   try {
-    const stored = await chrome.storage.sync.get(['pins', 'settings', 'lastActivePinId', 'sidebarHidden']);
+    const stored = await chrome.storage.sync.get(['pins', 'settings', 'sidebarHidden']);
     const defaults = browserSidebarGetDefaultStorageData();
     const settings = { ...defaults.settings, ...(stored.settings ?? {}) };
-
-    // Session-scoped panel state shared across tabs of this browser session
-    // (content scripts need the access level the background grants at startup).
-    let panelSession = { open: false, pinId: null as string | null };
-    try {
-      const session = await chrome.storage.session?.get(['browserSidebarPanelOpen', 'browserSidebarPanelPinId']);
-      if (session) {
-        panelSession = {
-          open: Boolean(session.browserSidebarPanelOpen),
-          pinId: typeof session.browserSidebarPanelPinId === 'string' ? session.browserSidebarPanelPinId : null
-        };
-      }
-    } catch {
-      // Access level not granted yet this session — panel starts closed.
-    }
 
     return {
       pins: (stored.pins ?? defaults.pins).slice().sort((a: Pin, b: Pin) => a.order - b.order),
       settings,
-      activePinId: stored.lastActivePinId ?? null,
       sidebarHidden: Boolean(stored.sidebarHidden),
-      panelWidth: settings.panelWidth ?? BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
-      panelSession
+      panelWidth: settings.panelWidth ?? BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth
     };
   } catch {
     const defaults = browserSidebarGetDefaultStorageData();
     return {
       pins: defaults.pins,
       settings: defaults.settings,
-      activePinId: null,
       sidebarHidden: false,
-      panelWidth: BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth,
-      panelSession: { open: false, pinId: null }
+      panelWidth: BROWSER_SIDEBAR_DEFAULTS.DEFAULT_SETTINGS.panelWidth
     };
   }
 }

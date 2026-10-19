@@ -9,7 +9,9 @@
     "tabs",
     "windows",
     "cookies",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "webRequest",
+    "browsingData"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -44,6 +46,12 @@
       "matches": ["<all_urls>"],
       "js": ["src/content/frameScrollGuard.ts"],
       "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/frameDiagnostics.ts"],
+      "run_at": "document_start",
       "all_frames": true
     }
   ],

@@ -43,10 +43,8 @@ void (async function initBrowserSidebar(): Promise<void> {
       <SidebarApp
         initialPins={storage.pins}
         initialSettings={storage.settings}
-        initialActivePinId={storage.panelSession.pinId ?? storage.activePinId}
         initialSidebarHidden={storage.sidebarHidden}
         initialPanelWidth={storage.panelWidth}
-        initialPanelOpen={storage.panelSession.open}
       />
     </StrictMode>
   );

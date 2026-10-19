@@ -29,6 +29,26 @@ let page;
     ],
   });
 
+  // --- Determinism guard (known quirk): this test clicks slot 0 of the strip,
+  // which is the 'messenger' default pin. If lastActivePinId is ALSO messenger
+  // (a previous run of this very test saves it after opening the panel), the
+  // first click takes SidebarApp's deselect branch (same pin, panel closed) and
+  // the panel never opens — self-sustaining failure across runs. Point
+  // lastActivePinId at a different pin so the click always opens.
+  // 1.5s wait: the fresh-profile onInstalled initializeStorage can race the
+  // storage.set below.
+  {
+    const worker = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent('serviceworker'));
+    const extId = new URL(worker.url()).host;
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+    await popup.waitForTimeout(1500);
+    await popup.evaluate(async () => {
+      await chrome.storage.sync.set({ lastActivePinId: 'x' });
+    });
+    await popup.close();
+  }
+
   page = await ctx.newPage();
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(PAGE_URL, { waitUntil: 'load' });
