@@ -1644,6 +1644,13 @@ export function SidebarApp({
         onPinHover={handlePinHover}
         onPinLeave={handlePinLeave}
         onPinPress={handlePinPress}
+        onPinDragStart={(index) => {
+          draggedIndexRef.current = index;
+        }}
+        onPinDragEnd={() => {
+          draggedIndexRef.current = null;
+        }}
+        onPinDropPin={(index) => void handleDropPin(index)}
       />
 
       <AppPanel

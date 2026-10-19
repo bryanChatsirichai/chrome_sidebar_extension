@@ -112,6 +112,25 @@ $browser-sidebar-text-white: #fff;
     box-shadow: 0 0 8px rgba(255, 0, 64, 0.5);
   }
 
+  .pin-button.dragging {
+    opacity: 0.4;
+  }
+
+  /* Drop-target insertion indicator: 2px line on the top edge, sitting in
+     the strip's 4px gap. Uses ::after so it never collides with the active
+     pin's ::before accent bar. */
+  .pin-button.drop-target::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: $browser-sidebar-accent;
+    border-radius: 1px;
+    box-shadow: 0 0 6px rgba(255, 0, 64, 0.6);
+  }
+
   .pin-button img {
     width: 22px;
     height: 22px;
